@@ -8,6 +8,10 @@ use drm::control::{Device as CtrlDevice, Mode, PageFlipFlags, connector, crtc, f
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, BorrowedFd};
 
+use crossbeam_channel::{Receiver, Sender, unbounded};
+use event_handler::AppEvent;
+mod event_handler;
+
 #[derive(Debug)]
 struct Card(File);
 
@@ -228,6 +232,18 @@ fn fill_rgb(buf: &mut [u8], pitch: usize, w: usize, h: usize, r: u8, g: u8, b: u
 
 fn main() -> Result<()> {
     let mut surface = Surface::open_default()?;
+
+    let (tx, rx) = unbounded();
+
+    event_handler::spawn_device_listeners(&tx)?;
+
+    let mut red_on = false;
+
+    eprintln!("Press 'Space' to toggle, 'Q' to quit.");
+
+    'mainloop: loop {
+        rx.recv()?;
+    }
 
     let ww = surface.disp_w as usize;
     let hh = surface.disp_h as usize;

@@ -91,30 +91,47 @@ impl Surface<'_> {
 
         let fmt = DrmFourcc::Xrgb8888;
 
-        let mut db =
-            card.create_dumb_buffer((display_width.into(), display_height.into()), fmt, 32)?;
+        let mut make_solid_fb = |r: u8,
+                                 g: u8,
+                                 b: u8|
+         -> Result<(DumbBuffer, framebuffer::Handle)> {
+            let mut db =
+                card.create_dumb_buffer((display_width.into(), display_height.into()), fmt, 32)?;
 
-        {
-            let mut map = card.map_dumb_buffer(&mut db)?;
-            for byte in map.as_mut() {
-                *byte = 128;
+            {
+                let mut map = card.map_dumb_buffer(&mut db)?;
+                for chunk in map.as_mut().chunks_exact_mut(4) {
+                    chunk[0] = b;
+                    chunk[1] = g;
+                    chunk[2] = r;
+                    chunk[3] = 0;
+                }
             }
-        }
 
-        let fb = card.add_framebuffer(&db, 24, 32)?;
+            let fb = card.add_framebuffer(&db, 24, 32)?;
 
-        println!("{mode:#?}");
-        println!("{fb:#?}");
-        println!("{db:#?}");
+            Ok((db, fb))
+        };
 
-        card.set_crtc(crtc, Some(fb), (0, 0), &[con], Some(mode))
+        let (db_grey, fb_grey) = make_solid_fb(0x80, 0x80, 0x80)?;
+        let (db_blue, fb_blue) = make_solid_fb(0x00, 0x00, 0x80)?;
+
+        card.set_crtc(crtc, Some(fb_grey), (0, 0), &[con], Some(mode))
             .context("failed to set crtc")?;
 
         let five_seconds = std::time::Duration::from_secs(5);
         std::thread::sleep(five_seconds);
 
-        card.destroy_framebuffer(fb)?;
-        card.destroy_dumb_buffer(db)?;
+        card.set_crtc(crtc, Some(fb_blue), (0, 0), &[con], Some(mode))
+            .context("failed to set crtc")?;
+
+        let five_seconds = std::time::Duration::from_secs(5);
+        std::thread::sleep(five_seconds);
+
+        card.destroy_framebuffer(fb_grey)?;
+        card.destroy_dumb_buffer(db_grey)?;
+        card.destroy_framebuffer(fb_blue)?;
+        card.destroy_dumb_buffer(db_blue)?;
 
         /*
         Ok(Self {

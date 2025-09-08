@@ -131,9 +131,9 @@ impl Surface<'_> {
         {
             let mut map = card.map_dumb_buffer(&mut db_0)?;
             for chunk in map.as_mut().chunks_exact_mut(4) {
-                chunk[0] = 0x80;
+                chunk[0] = 0x00;
                 chunk[1] = 0x00;
-                chunk[2] = 0x00;
+                chunk[2] = 0x80;
                 chunk[3] = 0;
             }
         }

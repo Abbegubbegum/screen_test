@@ -5,7 +5,6 @@ use drm::buffer::{Buffer, DrmFourcc};
 use drm::control as ctrl;
 use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
 use drm::control::{Device as CtrlDevice, Mode, connector, crtc, framebuffer};
-use memmap2::MmapMut;
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, BorrowedFd};
 
@@ -31,26 +30,27 @@ impl Card {
     }
 }
 
-struct Frame<'a> {
-    dbuf: DumbBuffer,
+struct Frame {
+    db: DumbBuffer,
     fb: framebuffer::Handle,
-    map: DumbMapping<'a>,
-    stride: u32,
+    disp_w: usize,
+    disp_h: usize,
+    stride: usize,
 }
 
-struct Surface<'a> {
+struct Surface {
     card: Card,
     con: connector::Handle,
     crtc: crtc::Handle,
     mode: Mode,
-    w: u32,
-    h: u32,
-    frames: [Frame<'a>; 2],
+    disp_w: u32,
+    disp_h: u32,
+    frames: [Frame; 2],
     front: usize,
 }
 
-impl Surface<'_> {
-    fn open_default() -> Result<()> {
+impl Surface {
+    fn open_default() -> Result<Self> {
         let card = Card::open_default();
 
         let res = card
@@ -87,86 +87,132 @@ impl Surface<'_> {
 
         let (con, crtc, mode) = selected.ok_or_else(|| anyhow!("no connected display"))?;
 
-        let (display_width, display_height) = mode.size();
+        let (disp_w, disp_h) = (mode.size().0 as u32, mode.size().1 as u32);
 
         let fmt = DrmFourcc::Xrgb8888;
 
-        let mut make_solid_fb = |r: u8,
-                                 g: u8,
-                                 b: u8|
-         -> Result<(DumbBuffer, framebuffer::Handle)> {
-            let mut db =
-                card.create_dumb_buffer((display_width.into(), display_height.into()), fmt, 32)?;
-
-            {
-                let mut map = card.map_dumb_buffer(&mut db)?;
-                for chunk in map.as_mut().chunks_exact_mut(4) {
-                    chunk[0] = b;
-                    chunk[1] = g;
-                    chunk[2] = r;
-                    chunk[3] = 0;
-                }
-            }
+        let make_frame = || -> Result<Frame> {
+            let db = card.create_dumb_buffer((disp_w, disp_h), fmt, 32)?;
 
             let fb = card.add_framebuffer(&db, 24, 32)?;
 
-            Ok((db, fb))
+            let stride = db.pitch();
+
+            Ok(Frame {
+                db,
+                fb,
+                disp_w: disp_w as usize,
+                disp_h: disp_h as usize,
+                stride: stride as usize,
+            })
         };
 
-        let (mut db_0, fb_0) = make_solid_fb(0x80, 0x80, 0x80)?;
-        let (mut db_1, fb_1) = make_solid_fb(0x00, 0x00, 0x80)?;
+        let f0 = make_frame()?;
+        let f1 = make_frame()?;
 
-        card.set_crtc(crtc, Some(fb_0), (0, 0), &[con], Some(mode))
+        card.set_crtc(crtc, Some(f0.fb), (0, 0), &[con], Some(mode))
             .context("failed to set crtc")?;
 
-        let five_seconds = std::time::Duration::from_secs(5);
-        std::thread::sleep(five_seconds);
-
-        card.set_crtc(crtc, Some(fb_1), (0, 0), &[con], Some(mode))
-            .context("failed to set crtc")?;
-
-        let five_seconds = std::time::Duration::from_secs(5);
-        std::thread::sleep(five_seconds);
-
-        {
-            let mut map = card.map_dumb_buffer(&mut db_0)?;
-            for chunk in map.as_mut().chunks_exact_mut(4) {
-                chunk[0] = 0x00;
-                chunk[1] = 0x00;
-                chunk[2] = 0x80;
-                chunk[3] = 0;
-            }
-        }
-
-        card.set_crtc(crtc, Some(fb_0), (0, 0), &[con], Some(mode))
-            .context("failed to set crtc")?;
-
-        let five_seconds = std::time::Duration::from_secs(5);
-        std::thread::sleep(five_seconds);
-
-        card.destroy_framebuffer(fb_0)?;
-        card.destroy_dumb_buffer(db_0)?;
-        card.destroy_framebuffer(fb_1)?;
-        card.destroy_dumb_buffer(db_1)?;
-
-        /*
         Ok(Self {
             card,
             con,
             crtc,
             mode,
-            w: display_width,
-            h: display_height,
-            frames: [],
+            disp_w,
+            disp_h,
+            frames: [f0, f1],
             front: 0,
         })
-         */
+    }
+
+    #[inline]
+    fn back(&self) -> usize {
+        1 - self.front
+    }
+
+    fn write_to_back_bytes(&mut self, src: &[u8], src_stride_bytes: usize) -> Result<()> {
+        let frame = &mut self.frames[self.back()];
+
+        assert!(
+            src_stride_bytes >= frame.stride,
+            "source stride is less than framebuffer stride"
+        );
+        assert!(
+            src.len() >= src_stride_bytes * frame.disp_h,
+            "source buffer is too small"
+        );
+
+        let mut map = self.card.map_dumb_buffer(&mut frame.db)?;
+
+        for y in 0..frame.disp_h {
+            let src_row_offset = y * src_stride_bytes;
+            let src_row = &src[src_row_offset..src_row_offset + src_stride_bytes];
+            let dst_offset = y * frame.stride;
+            let dst_row = &mut map[dst_offset..dst_offset + frame.stride];
+            dst_row.copy_from_slice(src_row);
+        }
+
+        Ok(())
+    }
+
+    fn flip(&mut self) -> Result<()> {
+        let frame = &self.frames[self.back()];
+
+        self.card
+            .set_crtc(
+                self.crtc,
+                Some(frame.fb),
+                (0, 0),
+                &[self.con],
+                Some(self.mode),
+            )
+            .context("failed to set crtc")?;
+
+        self.front = self.back();
+
         Ok(())
     }
 }
 
+impl Drop for Surface {
+    fn drop(&mut self) {
+        let _ = self.card.set_crtc(self.crtc, None, (0, 0), &[], None);
+        for f in &self.frames {
+            let _ = self.card.destroy_framebuffer(f.fb);
+            let _ = self.card.destroy_dumb_buffer(f.db);
+        }
+    }
+}
+
 fn main() -> Result<()> {
-    let surface = Surface::open_default()?;
+    let mut surface = Surface::open_default()?;
+
+    let ww = surface.disp_w as usize;
+    let hh = surface.disp_h as usize;
+    let pitch_src = ww * 4;
+
+    let mut bytes = vec![0u8; hh * pitch_src];
+
+    for y in 0..hh {
+        let row = &mut bytes[y * pitch_src..(y + 1) * pitch_src];
+
+        for x in 0..ww {
+            let r = 255u8;
+            let g = 0u8;
+            let b = 0u8;
+            let a = 0u8;
+            let offset = x * 4;
+            row[offset + 0] = b;
+            row[offset + 1] = g;
+            row[offset + 2] = r;
+            row[offset + 3] = a;
+        }
+    }
+
+    surface.write_to_back_bytes(&bytes, pitch_src)?;
+    surface.flip()?;
+
+    std::thread::sleep(std::time::Duration::from_secs(5));
 
     Ok(())
 }

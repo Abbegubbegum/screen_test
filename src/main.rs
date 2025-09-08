@@ -113,25 +113,41 @@ impl Surface<'_> {
             Ok((db, fb))
         };
 
-        let (db_grey, fb_grey) = make_solid_fb(0x80, 0x80, 0x80)?;
-        let (db_blue, fb_blue) = make_solid_fb(0x00, 0x00, 0x80)?;
+        let (mut db_0, fb_0) = make_solid_fb(0x80, 0x80, 0x80)?;
+        let (mut db_1, fb_1) = make_solid_fb(0x00, 0x00, 0x80)?;
 
-        card.set_crtc(crtc, Some(fb_grey), (0, 0), &[con], Some(mode))
+        card.set_crtc(crtc, Some(fb_0), (0, 0), &[con], Some(mode))
             .context("failed to set crtc")?;
 
         let five_seconds = std::time::Duration::from_secs(5);
         std::thread::sleep(five_seconds);
 
-        card.set_crtc(crtc, Some(fb_blue), (0, 0), &[con], Some(mode))
+        card.set_crtc(crtc, Some(fb_1), (0, 0), &[con], Some(mode))
             .context("failed to set crtc")?;
 
         let five_seconds = std::time::Duration::from_secs(5);
         std::thread::sleep(five_seconds);
 
-        card.destroy_framebuffer(fb_grey)?;
-        card.destroy_dumb_buffer(db_grey)?;
-        card.destroy_framebuffer(fb_blue)?;
-        card.destroy_dumb_buffer(db_blue)?;
+        {
+            let mut map = card.map_dumb_buffer(&mut db_0)?;
+            for chunk in map.as_mut().chunks_exact_mut(4) {
+                chunk[0] = 0x80;
+                chunk[1] = 0x00;
+                chunk[2] = 0x00;
+                chunk[3] = 0;
+            }
+        }
+
+        card.set_crtc(crtc, Some(fb_0), (0, 0), &[con], Some(mode))
+            .context("failed to set crtc")?;
+
+        let five_seconds = std::time::Duration::from_secs(5);
+        std::thread::sleep(five_seconds);
+
+        card.destroy_framebuffer(fb_0)?;
+        card.destroy_dumb_buffer(db_0)?;
+        card.destroy_framebuffer(fb_1)?;
+        card.destroy_dumb_buffer(db_1)?;
 
         /*
         Ok(Self {

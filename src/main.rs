@@ -3,8 +3,8 @@ use anyhow::{Context, Result, anyhow};
 use drm::Device as DrmDevice;
 use drm::buffer::{Buffer, DrmFourcc};
 use drm::control as ctrl;
-use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
-use drm::control::{Device as CtrlDevice, Mode, connector, crtc, framebuffer};
+use drm::control::dumbbuffer::DumbBuffer;
+use drm::control::{Device as CtrlDevice, Mode, PageFlipFlags, connector, crtc, framebuffer};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, BorrowedFd};
 
@@ -145,10 +145,10 @@ impl Surface {
         let mut map = self.card.map_dumb_buffer(&mut frame.db)?;
 
         for y in 0..frame.disp_h {
-            let src_row_offset = y * src_stride_bytes;
-            let src_row = &src[src_row_offset..src_row_offset + src_stride_bytes];
-            let dst_offset = y * frame.stride;
-            let dst_row = &mut map[dst_offset..dst_offset + frame.stride];
+            let src_0 = y * src_stride_bytes;
+            let dst_0 = y * frame.stride;
+            let src_row = &src[src_0..src_0 + src_stride_bytes];
+            let dst_row = &mut map[dst_0..dst_0 + frame.stride];
             dst_row.copy_from_slice(src_row);
         }
 
@@ -159,18 +159,24 @@ impl Surface {
         let frame = &self.frames[self.back()];
 
         self.card
-            .set_crtc(
-                self.crtc,
-                Some(frame.fb),
-                (0, 0),
-                &[self.con],
-                Some(self.mode),
-            )
-            .context("failed to set crtc")?;
-
-        self.front = self.back();
+            .page_flip(self.crtc, frame.fb, PageFlipFlags::EVENT, None)?;
 
         Ok(())
+    }
+
+    fn drain_events(&mut self) -> Result<bool> {
+        let mut flipped = false;
+        if let Ok(mut events) = self.card.receive_events() {
+            for _ in &mut events {
+                flipped = true;
+            }
+        }
+
+        if flipped {
+            self.front = self.back();
+        }
+
+        Ok(flipped)
     }
 }
 
@@ -184,6 +190,42 @@ impl Drop for Surface {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Pattern {
+    Solid,
+    Gradient,
+    Checker,
+    Motion,
+}
+
+const SOLIDS: &[(u8, u8, u8)] = &[
+    (255, 0, 0),
+    (0, 255, 0),
+    (0, 0, 255),
+    (255, 255, 255),
+    (128, 128, 128),
+    (0, 0, 0),
+];
+
+fn put_rgb(buf: &mut [u8], pitch: usize, x: usize, y: usize, r: u8, g: u8, b: u8) {
+    let offset = y * pitch + x * 4;
+
+    assert!(offset + 3 < buf.len(), "put_rgb out of bounds");
+
+    buf[offset + 0] = b;
+    buf[offset + 1] = g;
+    buf[offset + 2] = r;
+    buf[offset + 3] = 0xff;
+}
+
+fn fill_rgb(buf: &mut [u8], pitch: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
+    for y in 0..h {
+        for x in 0..w {
+            put_rgb(buf, pitch, x, y, r, g, b);
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let mut surface = Surface::open_default()?;
 
@@ -193,21 +235,15 @@ fn main() -> Result<()> {
 
     let mut bytes = vec![0u8; hh * pitch_src];
 
-    for y in 0..hh {
-        let row = &mut bytes[y * pitch_src..(y + 1) * pitch_src];
-
-        for x in 0..ww {
-            let r = 255u8;
-            let g = 0u8;
-            let b = 0u8;
-            let a = 0u8;
-            let offset = x * 4;
-            row[offset + 0] = b;
-            row[offset + 1] = g;
-            row[offset + 2] = r;
-            row[offset + 3] = a;
-        }
-    }
+    fill_rgb(
+        &mut bytes,
+        (surface.disp_w * 4) as usize,
+        surface.disp_w as usize,
+        surface.disp_h as usize,
+        0u8,
+        255u8,
+        0u8,
+    );
 
     surface.write_to_back_bytes(&bytes, pitch_src)?;
     surface.flip()?;

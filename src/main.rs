@@ -7,7 +7,10 @@ use drm::control::dumbbuffer::DumbBuffer;
 use drm::control::{Device as CtrlDevice, Mode, PageFlipFlags, connector, crtc, framebuffer};
 use evdev::{Device as EvDev, EventSummary, KeyCode};
 use std::fs::{File, OpenOptions};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::io::{AsFd, BorrowedFd};
+
+use nix::poll::{PollFd, PollFlags, poll};
 
 #[derive(Debug)]
 struct Card(File);
@@ -280,41 +283,65 @@ fn main() -> Result<()> {
     surface.write_to_back_bytes(&stage, stage_pitch)?;
     surface.flip()?;
 
+    let drm_file = unsafe { File::from_raw_fd(surface.card.as_fd().as_raw_fd()) };
+    let kb_file = unsafe { File::from_raw_fd(kb.as_raw_fd()) };
+
+    let drm_fd = drm_file.as_fd();
+    let kb_fd = kb_file.as_fd();
+
+    let mut fds = [
+        PollFd::new(drm_fd, PollFlags::POLLIN),
+        PollFd::new(kb_fd, PollFlags::POLLIN),
+    ];
+
     'mainloop: loop {
-        surface.handle_drm_events()?;
+        let _ = poll(&mut fds, 1u16)?;
 
-        eprintln!("blocked?");
+        if fds[0]
+            .revents()
+            .unwrap_or(PollFlags::empty())
+            .contains(PollFlags::POLLIN)
+        {
+            surface.handle_drm_events()?;
+        }
 
-        if let Ok(events) = kb.fetch_events() {
-            for event in events {
-                eprintln!("event?");
-                match event.destructure() {
-                    EventSummary::Key(_, KeyCode::KEY_SPACE, 1) => {
-                        eprintln!("Key press detected");
+        if fds[1]
+            .revents()
+            .unwrap_or(PollFlags::empty())
+            .contains(PollFlags::POLLIN)
+        {
+            if let Ok(events) = kb.fetch_events() {
+                for event in events {
+                    eprintln!("event?");
+                    match event.destructure() {
+                        EventSummary::Key(_, KeyCode::KEY_SPACE, 1) => {
+                            eprintln!("Key press detected");
 
-                        red_on = !red_on;
+                            red_on = !red_on;
 
-                        if red_on {
-                            fill_rgb(&mut stage, stage_pitch, ww, hh, 255, 0, 0);
-                            surface.write_to_back_bytes(&stage, stage_pitch)?;
-                        } else {
-                            fill_rgb(&mut stage, stage_pitch, ww, hh, 128, 128, 128);
-                            surface.write_to_back_bytes(&stage, stage_pitch)?;
+                            if red_on {
+                                fill_rgb(&mut stage, stage_pitch, ww, hh, 255, 0, 0);
+                                surface.write_to_back_bytes(&stage, stage_pitch)?;
+                            } else {
+                                fill_rgb(&mut stage, stage_pitch, ww, hh, 128, 128, 128);
+                                surface.write_to_back_bytes(&stage, stage_pitch)?;
+                            }
+
+                            surface.flip()?;
                         }
-
-                        surface.flip()?;
-                    }
-                    EventSummary::Key(_, KeyCode::KEY_Q, 1) => {
-                        break 'mainloop;
-                    }
-                    _ => {
-                        continue;
+                        EventSummary::Key(_, KeyCode::KEY_Q, 1) => {
+                            break 'mainloop;
+                        }
+                        _ => {
+                            continue;
+                        }
                     }
                 }
             }
         }
 
-        // std::thread::sleep(std::time::Duration::from_millis(20));
+        eprintln!("blocked?");
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 
     Ok(())

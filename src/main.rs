@@ -254,8 +254,6 @@ fn open_keyboard() -> Result<EvDev> {
             .supported_keys()
             .map_or(false, |keys| keys.contains(KeyCode::KEY_SPACE))
         {
-            dev.set_nonblocking(true)?;
-
             eprintln!("Using keyboard: {}, Name: {:?}", path.display(), dev.name());
 
             return Ok(dev);
@@ -303,7 +301,7 @@ fn main() -> Result<()> {
                 .unwrap_or(PollFlags::empty())
                 .contains(PollFlags::POLLIN);
 
-            return (drm_ready, kb_ready);
+            (drm_ready, kb_ready)
         };
 
         if drm_ready {

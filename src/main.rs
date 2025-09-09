@@ -191,6 +191,7 @@ impl Surface {
                 ctrl::Event::PageFlip(_) => {
                     if self.flipping {
                         self.front = self.back();
+                        self.flipping = false;
                     }
                 }
                 _ => {}

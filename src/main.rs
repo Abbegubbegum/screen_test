@@ -283,6 +283,8 @@ fn main() -> Result<()> {
     'mainloop: loop {
         surface.handle_drm_events()?;
 
+        eprintln!("blocked?");
+
         if let Ok(events) = kb.fetch_events() {
             for event in events {
                 match event.destructure() {

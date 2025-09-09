@@ -252,7 +252,7 @@ fn open_keyboard() -> Result<EvDev> {
         {
             dev.set_nonblocking(true).ok();
 
-            eprintln!("Using keyboard: {}", path.display());
+            eprintln!("Using keyboard: {}, Name: {:?}", path.display(), dev.name());
 
             return Ok(dev);
         }

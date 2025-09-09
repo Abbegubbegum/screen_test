@@ -5,12 +5,9 @@ use drm::buffer::{Buffer, DrmFourcc};
 use drm::control as ctrl;
 use drm::control::dumbbuffer::DumbBuffer;
 use drm::control::{Device as CtrlDevice, Mode, PageFlipFlags, connector, crtc, framebuffer};
+use evdev::{Device as EvDev, EventSummary, KeyCode};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, BorrowedFd};
-
-use crossbeam_channel::{Receiver, Sender, unbounded};
-use event_handler::AppEvent;
-mod event_handler;
 
 #[derive(Debug)]
 struct Card(File);
@@ -51,6 +48,7 @@ struct Surface {
     disp_h: u32,
     frames: [Frame; 2],
     front: usize,
+    flipping: bool,
 }
 
 impl Surface {
@@ -96,7 +94,18 @@ impl Surface {
         let fmt = DrmFourcc::Xrgb8888;
 
         let make_frame = || -> Result<Frame> {
-            let db = card.create_dumb_buffer((disp_w, disp_h), fmt, 32)?;
+            let mut db = card.create_dumb_buffer((disp_w, disp_h), fmt, 32)?;
+
+            {
+                let mut map = card.map_dumb_buffer(&mut db)?;
+
+                for px in map.as_mut().chunks_exact_mut(4) {
+                    px[0] = 128;
+                    px[1] = 128;
+                    px[2] = 128;
+                    px[3] = 0;
+                }
+            }
 
             let fb = card.add_framebuffer(&db, 24, 32)?;
 
@@ -126,6 +135,7 @@ impl Surface {
             disp_h,
             frames: [f0, f1],
             front: 0,
+            flipping: false,
         })
     }
 
@@ -160,27 +170,31 @@ impl Surface {
     }
 
     fn flip(&mut self) -> Result<()> {
-        let frame = &self.frames[self.back()];
+        assert!(self.flipping, "flip already pending");
+
+        let target_frame = &self.frames[self.back()];
 
         self.card
-            .page_flip(self.crtc, frame.fb, PageFlipFlags::EVENT, None)?;
+            .page_flip(self.crtc, target_frame.fb, PageFlipFlags::EVENT, None)?;
+
+        self.flipping = true;
 
         Ok(())
     }
 
-    fn drain_events(&mut self) -> Result<bool> {
-        let mut flipped = false;
-        if let Ok(mut events) = self.card.receive_events() {
-            for _ in &mut events {
-                flipped = true;
+    fn handle_drm_events(&mut self) -> Result<()> {
+        for event in self.card.receive_events()? {
+            match event {
+                ctrl::Event::PageFlip(_) => {
+                    if self.flipping {
+                        self.front = self.back();
+                    }
+                }
+                _ => {}
             }
         }
 
-        if flipped {
-            self.front = self.back();
-        }
-
-        Ok(flipped)
+        Ok(())
     }
 }
 
@@ -230,41 +244,73 @@ fn fill_rgb(buf: &mut [u8], pitch: usize, w: usize, h: usize, r: u8, g: u8, b: u
     }
 }
 
+fn open_keyboard() -> Result<EvDev> {
+    for (path, dev) in evdev::enumerate() {
+        if dev
+            .supported_keys()
+            .map_or(false, |keys| keys.contains(KeyCode::KEY_SPACE))
+        {
+            dev.set_nonblocking(true).ok();
+
+            eprintln!("Using keyboard: {}", path.display());
+
+            return Ok(dev);
+        }
+    }
+    Err(anyhow!("can't find device"))
+}
+
 fn main() -> Result<()> {
     let mut surface = Surface::open_default()?;
 
-    let (tx, rx) = unbounded();
-
-    event_handler::spawn_device_listeners(&tx)?;
+    let mut kb = open_keyboard()?;
 
     let mut red_on = false;
 
     eprintln!("Press 'Space' to toggle, 'Q' to quit.");
 
-    'mainloop: loop {
-        rx.recv()?;
-    }
-
     let ww = surface.disp_w as usize;
     let hh = surface.disp_h as usize;
-    let pitch_src = ww * 4;
+    let stage_pitch = ww * 4;
 
-    let mut bytes = vec![0u8; hh * pitch_src];
+    let mut stage = vec![0u8; hh * stage_pitch];
 
-    fill_rgb(
-        &mut bytes,
-        (surface.disp_w * 4) as usize,
-        surface.disp_w as usize,
-        surface.disp_h as usize,
-        0u8,
-        255u8,
-        0u8,
-    );
+    fill_rgb(&mut stage, stage_pitch, ww, hh, 0u8, 255u8, 0u8);
 
-    surface.write_to_back_bytes(&bytes, pitch_src)?;
+    surface.write_to_back_bytes(&stage, stage_pitch)?;
     surface.flip()?;
 
-    std::thread::sleep(std::time::Duration::from_secs(5));
+    'mainloop: loop {
+        surface.handle_drm_events()?;
+
+        if let Ok(events) = kb.fetch_events() {
+            for event in events {
+                match event.destructure() {
+                    EventSummary::Key(_, KeyCode::KEY_SPACE, 1) => {
+                        red_on = !red_on;
+
+                        if red_on {
+                            fill_rgb(&mut stage, stage_pitch, ww, hh, 255, 0, 0);
+                            surface.write_to_back_bytes(&stage, stage_pitch)?;
+                        } else {
+                            fill_rgb(&mut stage, stage_pitch, ww, hh, 128, 128, 128);
+                            surface.write_to_back_bytes(&stage, stage_pitch)?;
+                        }
+
+                        surface.flip()?;
+                    }
+                    EventSummary::Key(_, KeyCode::KEY_Q, 1) => {
+                        break 'mainloop;
+                    }
+                    _ => {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
 
     Ok(())
 }

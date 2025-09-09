@@ -272,7 +272,7 @@ fn main() -> Result<()> {
 
     let mut kb = open_keyboard()?;
 
-    let mut red_on = false;
+    let mut red_on = true;
 
     eprintln!("Press 'Space' to toggle, 'Q' to quit.");
 

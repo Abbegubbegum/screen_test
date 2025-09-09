@@ -173,6 +173,7 @@ impl Surface {
     }
 
     fn flip(&mut self) -> Result<()> {
+        println!("flip!");
         assert!(!self.flipping, "flip already pending");
 
         let target_frame = &self.frames[self.back()];
@@ -187,8 +188,10 @@ impl Surface {
 
     fn handle_drm_events(&mut self) -> Result<()> {
         for event in self.card.receive_events()? {
+            println!("drm event");
             match event {
                 ctrl::Event::PageFlip(_) => {
+                    println!("pageflip event!");
                     if self.flipping {
                         self.front = self.back();
                         self.flipping = false;
@@ -313,10 +316,10 @@ fn main() -> Result<()> {
         {
             if let Ok(events) = kb.fetch_events() {
                 for event in events {
-                    eprintln!("event?");
+                    eprintln!("event {:?}", event);
                     match event.destructure() {
                         EventSummary::Key(_, KeyCode::KEY_SPACE, 1) => {
-                            eprintln!("Key press detected");
+                            println!("Space press detected");
 
                             red_on = !red_on;
 
@@ -341,7 +344,6 @@ fn main() -> Result<()> {
             }
         }
 
-        eprintln!("blocked?");
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 

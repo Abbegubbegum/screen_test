@@ -250,7 +250,7 @@ fn open_keyboard() -> Result<EvDev> {
             .supported_keys()
             .map_or(false, |keys| keys.contains(KeyCode::KEY_SPACE))
         {
-            dev.set_nonblocking(true).ok();
+            dev.set_nonblocking(true)?;
 
             eprintln!("Using keyboard: {}, Name: {:?}", path.display(), dev.name());
 
@@ -287,6 +287,7 @@ fn main() -> Result<()> {
 
         if let Ok(events) = kb.fetch_events() {
             for event in events {
+                eprintln!("event?");
                 match event.destructure() {
                     EventSummary::Key(_, KeyCode::KEY_SPACE, 1) => {
                         eprintln!("Key press detected");
@@ -313,7 +314,7 @@ fn main() -> Result<()> {
             }
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        // std::thread::sleep(std::time::Duration::from_millis(20));
     }
 
     Ok(())

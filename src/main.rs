@@ -164,7 +164,7 @@ impl Surface {
         for y in 0..frame.disp_h {
             let src_0 = y * src_stride_bytes;
             let dst_0 = y * frame.stride;
-            let src_row = &src[src_0..src_0 + src_stride_bytes];
+            let src_row = &src[src_0..src_0 + frame.stride]; // If the row is longer i.e src_strice > frame.stride, only copy up to frame.stride pixels
             let dst_row = &mut map[dst_0..dst_0 + frame.stride];
             dst_row.copy_from_slice(src_row);
         }
@@ -173,7 +173,6 @@ impl Surface {
     }
 
     fn flip(&mut self) -> Result<()> {
-        println!("flip!");
         assert!(!self.flipping, "flip already pending");
 
         let target_frame = &self.frames[self.back()];
@@ -188,10 +187,8 @@ impl Surface {
 
     fn handle_drm_events(&mut self) -> Result<()> {
         for event in self.card.receive_events()? {
-            println!("drm event");
             match event {
                 ctrl::Event::PageFlip(_) => {
-                    println!("pageflip event!");
                     if self.flipping {
                         self.front = self.back();
                         self.flipping = false;
@@ -287,40 +284,37 @@ fn main() -> Result<()> {
     surface.write_to_back_bytes(&stage, stage_pitch)?;
     surface.flip()?;
 
-    let drm_file = unsafe { File::from_raw_fd(surface.card.as_fd().as_raw_fd()) };
-    let kb_file = unsafe { File::from_raw_fd(kb.as_raw_fd()) };
-
-    let drm_fd = drm_file.as_fd();
-    let kb_fd = kb_file.as_fd();
-
-    let mut fds = [
-        PollFd::new(drm_fd, PollFlags::POLLIN),
-        PollFd::new(kb_fd, PollFlags::POLLIN),
-    ];
-
     'mainloop: loop {
-        let _ = poll(&mut fds, 1u16)?;
+        let (drm_ready, kb_ready) = {
+            let mut fds = [
+                PollFd::new(surface.card.as_fd(), PollFlags::POLLIN),
+                PollFd::new(kb.as_fd(), PollFlags::POLLIN),
+            ];
 
-        if fds[0]
-            .revents()
-            .unwrap_or(PollFlags::empty())
-            .contains(PollFlags::POLLIN)
-        {
+            let _ = poll(&mut fds, 1u16)?;
+
+            let drm_ready = fds[0]
+                .revents()
+                .unwrap_or(PollFlags::empty())
+                .contains(PollFlags::POLLIN);
+
+            let kb_ready = fds[1]
+                .revents()
+                .unwrap_or(PollFlags::empty())
+                .contains(PollFlags::POLLIN);
+
+            return (drm_ready, kb_ready);
+        };
+
+        if drm_ready {
             surface.handle_drm_events()?;
         }
 
-        if fds[1]
-            .revents()
-            .unwrap_or(PollFlags::empty())
-            .contains(PollFlags::POLLIN)
-        {
+        if kb_ready {
             if let Ok(events) = kb.fetch_events() {
                 for event in events {
-                    eprintln!("event {:?}", event);
                     match event.destructure() {
                         EventSummary::Key(_, KeyCode::KEY_SPACE, 1) => {
-                            println!("Space press detected");
-
                             red_on = !red_on;
 
                             if red_on {

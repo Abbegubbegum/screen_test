@@ -1,14 +1,14 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 
 use drm::Device as DrmDevice;
 use drm::buffer::{Buffer, DrmFourcc};
 use drm::control as ctrl;
 use drm::control::dumbbuffer::DumbBuffer;
-use drm::control::{Device as CtrlDevice, Mode, PageFlipFlags, connector, crtc, framebuffer};
+use drm::control::{Device as CtrlDevice, PageFlipFlags, connector, crtc, framebuffer};
 use evdev::{Device as EvDev, EventSummary, KeyCode};
 use std::fs::{File, OpenOptions};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::io::{AsFd, BorrowedFd};
+use std::time::Instant;
 
 use nix::poll::{PollFd, PollFlags, poll};
 
@@ -37,21 +37,19 @@ impl Card {
 struct Frame {
     db: DumbBuffer,
     fb: framebuffer::Handle,
-    disp_w: usize,
+    _disp_w: usize,
     disp_h: usize,
     stride: usize,
 }
 
 struct Surface {
     card: Card,
-    con: connector::Handle,
     crtc: crtc::Handle,
-    mode: Mode,
-    disp_w: u32,
-    disp_h: u32,
+    disp_w: usize,
+    disp_h: usize,
     frames: [Frame; 2],
     front: usize,
-    flipping: bool,
+    is_flipping: bool,
 }
 
 impl Surface {
@@ -97,18 +95,7 @@ impl Surface {
         let fmt = DrmFourcc::Xrgb8888;
 
         let make_frame = || -> Result<Frame> {
-            let mut db = card.create_dumb_buffer((disp_w, disp_h), fmt, 32)?;
-
-            {
-                let mut map = card.map_dumb_buffer(&mut db)?;
-
-                for px in map.as_mut().chunks_exact_mut(4) {
-                    px[0] = 128;
-                    px[1] = 128;
-                    px[2] = 128;
-                    px[3] = 0;
-                }
-            }
+            let db = card.create_dumb_buffer((disp_w, disp_h), fmt, 32)?;
 
             let fb = card.add_framebuffer(&db, 24, 32)?;
 
@@ -117,7 +104,7 @@ impl Surface {
             Ok(Frame {
                 db,
                 fb,
-                disp_w: disp_w as usize,
+                _disp_w: disp_w as usize,
                 disp_h: disp_h as usize,
                 stride: stride as usize,
             })
@@ -131,14 +118,12 @@ impl Surface {
 
         Ok(Self {
             card,
-            con,
             crtc,
-            mode,
-            disp_w,
-            disp_h,
+            disp_w: disp_w as usize,
+            disp_h: disp_h as usize,
             frames: [f0, f1],
             front: 0,
-            flipping: false,
+            is_flipping: false,
         })
     }
 
@@ -147,25 +132,25 @@ impl Surface {
         1 - self.front
     }
 
-    fn write_to_back_bytes(&mut self, src: &[u8], src_stride_bytes: usize) -> Result<()> {
-        let frame = &mut self.frames[self.back()];
+    #[inline]
+    fn stride(&self) -> usize {
+        self.frames[0].stride
+    }
 
-        assert!(
-            src_stride_bytes >= frame.stride,
-            "source stride is less than framebuffer stride"
-        );
-        assert!(
-            src.len() >= src_stride_bytes * frame.disp_h,
-            "source buffer is too small"
+    fn write_to_back(&mut self, src: &[u8]) -> Result<()> {
+        let frame = &mut self.frames[self.back()];
+        ensure!(
+            src.len() >= frame.stride * frame.disp_h,
+            "source buffer too small"
         );
 
         let mut map = self.card.map_dumb_buffer(&mut frame.db)?;
 
         for y in 0..frame.disp_h {
-            let src_0 = y * src_stride_bytes;
-            let dst_0 = y * frame.stride;
-            let src_row = &src[src_0..src_0 + frame.stride]; // If the row is longer i.e src_strice > frame.stride, only copy up to frame.stride pixels
-            let dst_row = &mut map[dst_0..dst_0 + frame.stride];
+            let p0 = y * frame.stride;
+            let p1 = p0 + frame.stride;
+            let src_row = &src[p0..p1]; // If the row is longer i.e src_strice > frame.stride, only copy up to frame.stride pixels
+            let dst_row = &mut map[p0..p1];
             dst_row.copy_from_slice(src_row);
         }
 
@@ -173,28 +158,25 @@ impl Surface {
     }
 
     fn flip(&mut self) -> Result<()> {
-        assert!(!self.flipping, "flip already pending");
+        ensure!(!self.is_flipping, "flip already pending");
 
         let target_frame = &self.frames[self.back()];
 
         self.card
             .page_flip(self.crtc, target_frame.fb, PageFlipFlags::EVENT, None)?;
 
-        self.flipping = true;
+        self.is_flipping = true;
 
         Ok(())
     }
 
     fn handle_drm_events(&mut self) -> Result<()> {
         for event in self.card.receive_events()? {
-            match event {
-                ctrl::Event::PageFlip(_) => {
-                    if self.flipping {
-                        self.front = self.back();
-                        self.flipping = false;
-                    }
+            if let ctrl::Event::PageFlip(_) = event {
+                if self.is_flipping {
+                    self.front = self.back();
+                    self.is_flipping = false;
                 }
-                _ => {}
             }
         }
 
@@ -213,11 +195,19 @@ impl Drop for Surface {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Pattern {
+enum PatternKind {
     Solid,
     Gradient,
     Checker,
     Motion,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GradMode {
+    Luma,
+    Red,
+    Green,
+    Blue,
 }
 
 const SOLIDS: &[(u8, u8, u8)] = &[
@@ -229,8 +219,8 @@ const SOLIDS: &[(u8, u8, u8)] = &[
     (0, 0, 0),
 ];
 
-fn put_rgb(buf: &mut [u8], pitch: usize, x: usize, y: usize, r: u8, g: u8, b: u8) {
-    let offset = y * pitch + x * 4;
+fn put_rgb(buf: &mut [u8], stride: usize, x: usize, y: usize, r: u8, g: u8, b: u8) {
+    let offset = y * stride + x * 4;
 
     assert!(offset + 3 < buf.len(), "put_rgb out of bounds");
 
@@ -240,10 +230,72 @@ fn put_rgb(buf: &mut [u8], pitch: usize, x: usize, y: usize, r: u8, g: u8, b: u8
     buf[offset + 3] = 0xff;
 }
 
-fn fill_rgb(buf: &mut [u8], pitch: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
+fn fill_rgb(buf: &mut [u8], stride: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
     for y in 0..h {
         for x in 0..w {
-            put_rgb(buf, pitch, x, y, r, g, b);
+            put_rgb(buf, stride, x, y, r, g, b);
+        }
+    }
+}
+
+fn draw_gradient(
+    buf: &mut [u8],
+    stride: usize,
+    w: usize,
+    h: usize,
+    mode: GradMode,
+    vertical: bool,
+) {
+    match mode {
+        GradMode::Luma => {
+            let len = if vertical { h } else { w };
+            for y in 0..h {
+                for x in 0..w {
+                    let t = if vertical { y } else { x };
+                    let v = ((t * 255) / (len - 1).max(1)) as u8;
+                    put_rgb(buf, stride, x, y, v, v, v);
+                }
+            }
+        }
+        _ => {
+            let channel = match mode {
+                GradMode::Red => 0,
+                GradMode::Green => 1,
+                GradMode::Blue => 2,
+                _ => unreachable!(),
+            };
+
+            let len = if vertical { h } else { w };
+            for y in 0..h {
+                for x in 0..w {
+                    let t = if vertical { y } else { x };
+                    let v = ((t * 255) / (len - 1).max(1)) as u8;
+                    let (mut r, mut g, mut b) = (0u8, 0u8, 0u8);
+
+                    match channel {
+                        0 => r = v,
+                        1 => g = v,
+                        2 => b = v,
+                        _ => {}
+                    };
+
+                    put_rgb(buf, stride, x, y, r, g, b);
+                }
+            }
+        }
+    }
+}
+
+fn draw_checkerboard(buf: &mut [u8], stride: usize, w: usize, h: usize, cell: usize) {
+    let cell = cell.max(1);
+
+    for y in 0..h {
+        let by = (y / cell) & 1;
+        for x in 0..w {
+            let bx = (x / cell) & 1;
+            let white = (bx ^ by) == 0;
+            let v = if white { 255 } else { 0 };
+            put_rgb(buf, stride, x, y, v, v, v);
         }
     }
 }
@@ -262,25 +314,81 @@ fn open_keyboard() -> Result<EvDev> {
     Err(anyhow!("can't find device"))
 }
 
+struct AppState {
+    patterns: [PatternKind; 3],
+    pattern_idx: usize,
+    solid_idx: usize,
+    grad_mode: GradMode,
+    grad_vertical: bool,
+    checker_cell: usize,
+    last_switch: Instant,
+}
+
+impl AppState {
+    fn new() -> Self {
+        Self {
+            patterns: [
+                PatternKind::Solid,
+                PatternKind::Gradient,
+                PatternKind::Checker,
+            ],
+            pattern_idx: 0,
+            solid_idx: 0,
+            grad_mode: GradMode::Luma,
+            grad_vertical: false,
+            checker_cell: 8,
+            last_switch: Instant::now(),
+        }
+    }
+
+    fn next_pattern(&mut self) {
+        self.pattern_idx = (self.pattern_idx + 1) % self.patterns.len();
+        self.last_switch = Instant::now();
+    }
+
+    fn previous_pattern(&mut self) {
+        self.pattern_idx = (self.pattern_idx + self.patterns.len() - 1) % self.patterns.len()
+    }
+
+    fn pattern(&self) -> PatternKind {
+        self.patterns[self.pattern_idx]
+    }
+
+    fn next_gradmode(&mut self) {
+        self.grad_mode = match self.grad_mode {
+            GradMode::Luma => GradMode::Red,
+            GradMode::Red => GradMode::Green,
+            GradMode::Green => GradMode::Blue,
+            GradMode::Blue => GradMode::Luma,
+        }
+    }
+
+    fn increment_cellsize(&mut self) {
+        self.checker_cell = match self.checker_cell {
+            1 => 2,
+            2 => 4,
+            4 => 8,
+            8 => 16,
+            16 => 32,
+            _ => 1,
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let mut surface = Surface::open_default()?;
 
     let mut kb = open_keyboard()?;
 
-    let mut red_on = true;
+    let mut stage = vec![0u8; surface.disp_h * surface.stride()];
 
-    eprintln!("Press 'Space' to toggle, 'Q' to quit.");
+    let mut state = AppState::new();
+    let mut need_redraw = true;
 
-    let ww = surface.disp_w as usize;
-    let hh = surface.disp_h as usize;
-    let stage_pitch = ww * 4;
-
-    let mut stage = vec![0u8; hh * stage_pitch];
-
-    fill_rgb(&mut stage, stage_pitch, ww, hh, 255u8, 0u8, 0u8);
-
-    surface.write_to_back_bytes(&stage, stage_pitch)?;
+    surface.write_to_back(&stage)?;
     surface.flip()?;
+
+    let mut last_frame = Instant::now();
 
     'mainloop: loop {
         let (drm_ready, kb_ready) = {
@@ -311,27 +419,79 @@ fn main() -> Result<()> {
         if kb_ready {
             if let Ok(events) = kb.fetch_events() {
                 for event in events {
-                    match event.destructure() {
-                        EventSummary::Key(_, KeyCode::KEY_SPACE, 1) => {
-                            red_on = !red_on;
-
-                            if red_on {
-                                fill_rgb(&mut stage, stage_pitch, ww, hh, 255, 0, 0);
-                                surface.write_to_back_bytes(&stage, stage_pitch)?;
-                            } else {
-                                fill_rgb(&mut stage, stage_pitch, ww, hh, 128, 128, 128);
-                                surface.write_to_back_bytes(&stage, stage_pitch)?;
+                    if let EventSummary::Key(_, code, 1) = event.destructure() {
+                        match code {
+                            KeyCode::KEY_Q | KeyCode::KEY_ESC => break 'mainloop,
+                            KeyCode::KEY_RIGHT => {
+                                state.next_pattern();
                             }
+                            KeyCode::KEY_LEFT => {
+                                state.previous_pattern();
+                            }
+                            KeyCode::KEY_SPACE => match state.pattern() {
+                                PatternKind::Solid => {
+                                    state.solid_idx = (state.solid_idx + 1) % SOLIDS.len();
+                                }
+                                PatternKind::Gradient => {
+                                    state.next_gradmode();
+                                }
+                                PatternKind::Checker => {
+                                    state.increment_cellsize();
+                                }
+                                _ => {}
+                            },
+                            KeyCode::KEY_V => {
+                                state.grad_vertical = !state.grad_vertical;
+                            }
+                            _ => {}
+                        }
 
-                            surface.flip()?;
-                        }
-                        EventSummary::Key(_, KeyCode::KEY_Q, 1) => {
-                            break 'mainloop;
-                        }
-                        _ => {
-                            continue;
-                        }
+                        need_redraw = true;
                     }
+                }
+            }
+        }
+
+        let now = Instant::now();
+        let _dt = now.duration_since(last_frame);
+        last_frame = now;
+
+        if need_redraw || matches!(state.pattern(), PatternKind::Motion) {
+            match state.pattern() {
+                PatternKind::Solid => {
+                    let (r, g, b) = SOLIDS[state.solid_idx];
+
+                    fill_rgb(
+                        &mut stage,
+                        surface.stride(),
+                        surface.disp_w,
+                        surface.disp_h,
+                        r,
+                        g,
+                        b,
+                    );
+                }
+                PatternKind::Gradient => {
+                    draw_gradient(
+                        &mut stage,
+                        surface.stride(),
+                        surface.disp_w,
+                        surface.disp_h,
+                        state.grad_mode,
+                        state.grad_vertical,
+                    );
+                }
+                PatternKind::Checker => {
+                    draw_checkerboard(
+                        &mut stage,
+                        surface.stride(),
+                        surface.disp_w,
+                        surface.disp_h,
+                        state.checker_cell,
+                    );
+                }
+                PatternKind::Motion => {
+                    todo!()
                 }
             }
         }

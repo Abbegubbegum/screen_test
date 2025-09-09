@@ -496,7 +496,12 @@ fn main() -> Result<()> {
             }
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        let should_submit = need_redraw || matches!(state.pattern(), PatternKind::Motion);
+        if should_submit && !surface.is_flipping {
+            surface.write_to_back(&stage)?;
+            surface.flip()?;
+            need_redraw = false;
+        }
     }
 
     Ok(())

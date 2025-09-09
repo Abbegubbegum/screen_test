@@ -275,7 +275,7 @@ fn main() -> Result<()> {
 
     let mut stage = vec![0u8; hh * stage_pitch];
 
-    fill_rgb(&mut stage, stage_pitch, ww, hh, 0u8, 255u8, 0u8);
+    fill_rgb(&mut stage, stage_pitch, ww, hh, 255u8, 0u8, 0u8);
 
     surface.write_to_back_bytes(&stage, stage_pitch)?;
     surface.flip()?;
@@ -287,6 +287,8 @@ fn main() -> Result<()> {
             for event in events {
                 match event.destructure() {
                     EventSummary::Key(_, KeyCode::KEY_SPACE, 1) => {
+                        eprintln!("Key press detected");
+
                         red_on = !red_on;
 
                         if red_on {
@@ -309,7 +311,7 @@ fn main() -> Result<()> {
             }
         }
 
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 
     Ok(())

@@ -300,6 +300,40 @@ fn draw_checkerboard(buf: &mut [u8], stride: usize, w: usize, h: usize, cell: us
     }
 }
 
+fn draw_motion_bar(buf: &mut [u8], stride: usize, w: usize, h: usize, x_pos: usize, bar_w: usize) {
+    fill_rgb(buf, stride, w, h, 0, 0, 0);
+
+    let x0 = x_pos.min(w);
+    let x1 = (x_pos + bar_w).min(w);
+
+    for y in 0..h {
+        for x in x0..x1 {
+            put_rgb(buf, stride, x, y, 255, 255, 255);
+        }
+    }
+}
+
+fn overlay_near_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
+    let sz = (w.min(h) / 10).max(32);
+
+    for (i, v) in (1u8..=5u8).enumerate() {
+        for y in (i * sz / 5)..((i + 1) * sz / 5) {
+            for x in 0..sz {
+                put_rgb(buf, stride, x, y, v, v, v);
+            }
+        }
+    }
+
+    for (i, v) in (250u8..=254u8).enumerate() {
+        let y0 = h.saturating_sub(sz) + (i * sz / 5);
+        for y in y0..(y0 + sz / 5).min(h) {
+            for x in (w.saturating_sub(sz))..w {
+                put_rgb(buf, stride, x, y, v, v, v);
+            }
+        }
+    }
+}
+
 fn open_keyboard() -> Result<EvDev> {
     for (path, dev) in evdev::enumerate() {
         if dev
@@ -321,6 +355,10 @@ struct AppState {
     grad_mode: GradMode,
     grad_vertical: bool,
     checker_cell: usize,
+    motion_x: isize,
+    motion_speed: usize,
+    motion_dir: i32,
+    show_patches: bool,
     last_switch: Instant,
 }
 
@@ -337,6 +375,10 @@ impl AppState {
             grad_mode: GradMode::Luma,
             grad_vertical: false,
             checker_cell: 8,
+            motion_x: 0,
+            motion_speed: 8,
+            motion_dir: 1,
+            show_patches: false,
             last_switch: Instant::now(),
         }
     }
@@ -438,10 +480,24 @@ fn main() -> Result<()> {
                                 PatternKind::Checker => {
                                     state.increment_cellsize();
                                 }
-                                _ => {}
+                                PatternKind::Motion => {
+                                    state.motion_dir *= -1;
+                                }
                             },
                             KeyCode::KEY_V => {
                                 state.grad_vertical = !state.grad_vertical;
+                            }
+                            KeyCode::KEY_P => {
+                                state.show_patches = !state.show_patches;
+                            }
+                            KeyCode::KEY_M => {
+                                state.motion_speed = match state.motion_speed {
+                                    2 => 4,
+                                    4 => 8,
+                                    8 => 16,
+                                    16 => 32,
+                                    _ => 2,
+                                }
                             }
                             _ => {}
                         }
@@ -491,8 +547,29 @@ fn main() -> Result<()> {
                     );
                 }
                 PatternKind::Motion => {
-                    todo!()
+                    let bar_w = (surface.disp_w / 40).max(8);
+                    state.motion_x = state.motion_x
+                        + (state.motion_dir as isize) * (state.motion_speed as isize);
+
+                    if state.motion_x < 0 {
+                        state.motion_x = (surface.disp_w as isize) - 1
+                    } else if state.motion_x as usize >= surface.disp_w {
+                        state.motion_x = 0;
+                    }
+
+                    draw_motion_bar(
+                        &mut stage,
+                        surface.stride(),
+                        surface.disp_w,
+                        surface.disp_h,
+                        state.motion_x as usize,
+                        bar_w,
+                    );
                 }
+            }
+
+            if state.show_patches {
+                overlay_near_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
             }
         }
 

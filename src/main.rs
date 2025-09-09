@@ -170,7 +170,7 @@ impl Surface {
     }
 
     fn flip(&mut self) -> Result<()> {
-        assert!(self.flipping, "flip already pending");
+        assert!(!self.flipping, "flip already pending");
 
         let target_frame = &self.frames[self.back()];
 

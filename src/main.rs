@@ -349,7 +349,7 @@ fn open_keyboard() -> Result<EvDev> {
 }
 
 struct AppState {
-    patterns: [PatternKind; 3],
+    patterns: [PatternKind; 4],
     pattern_idx: usize,
     solid_idx: usize,
     grad_mode: GradMode,
@@ -369,6 +369,7 @@ impl AppState {
                 PatternKind::Solid,
                 PatternKind::Gradient,
                 PatternKind::Checker,
+                PatternKind::Motion,
             ],
             pattern_idx: 0,
             solid_idx: 0,

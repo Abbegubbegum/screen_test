@@ -227,7 +227,7 @@ const SOLIDS: &[(u8, u8, u8)] = &[
 fn put_rgb(buf: &mut [u8], stride: usize, x: usize, y: usize, r: u8, g: u8, b: u8) {
     let offset = y * stride + x * 4;
 
-    assert!(offset + 3 < buf.len(), "put_rgb out of bounds");
+    assert!(offset + 3 < buf.len(), "put_rgb out of bounds {}, {}", x, y);
 
     buf[offset + 0] = b;
     buf[offset + 1] = g;
@@ -624,7 +624,7 @@ impl AppState {
             script.push(Step {
                 pat: PatternKind::Gradient,
                 grad_mode: gm,
-                grad_vertical: true,
+                grad_vertical: false,
                 ..Default::default()
             });
         }
@@ -683,24 +683,6 @@ impl AppState {
         self.script_idx -= 1;
         self.apply_current_step();
     }
-
-    fn next_gradmode(&mut self) {
-        self.grad_mode = match self.grad_mode {
-            GradMode::Luma => GradMode::Red,
-            GradMode::Red => GradMode::Green,
-            GradMode::Green => GradMode::Blue,
-            GradMode::Blue => GradMode::Luma,
-        }
-    }
-
-    fn increment_cellsize(&mut self) {
-        self.checker_cell = match self.checker_cell {
-            1 => 2,
-            2 => 4,
-            4 => 8,
-            _ => 1,
-        }
-    }
 }
 
 fn main() -> Result<()> {
@@ -754,27 +736,12 @@ fn main() -> Result<()> {
                     if let EventSummary::Key(_, code, 1) = event.destructure() {
                         match code {
                             KeyCode::KEY_Q | KeyCode::KEY_ESC => break 'mainloop,
-                            KeyCode::KEY_RIGHT => {
+                            KeyCode::KEY_RIGHT | KeyCode::KEY_SPACE => {
                                 state.next_step();
                             }
                             KeyCode::KEY_LEFT => {
                                 state.previous_step();
                             }
-                            KeyCode::KEY_SPACE => match state.pattern {
-                                PatternKind::Solid => {
-                                    state.solid_idx = (state.solid_idx + 1) % SOLIDS.len();
-                                }
-                                PatternKind::Gradient => {
-                                    state.next_gradmode();
-                                }
-                                PatternKind::Checker => {
-                                    state.increment_cellsize();
-                                }
-                                PatternKind::Motion => {
-                                    state.motion_dir *= -1;
-                                }
-                                _ => {}
-                            },
                             KeyCode::KEY_V => {
                                 state.grad_vertical = !state.grad_vertical;
                             }

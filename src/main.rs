@@ -462,7 +462,7 @@ fn main() -> Result<()> {
 
         if drm_ready {
             println!("flip has gone through!");
-            surface.handle_drm_events()?;
+            flipped = surface.handle_drm_events()?;
         }
 
         if kb_ready {
@@ -526,7 +526,7 @@ fn main() -> Result<()> {
             continue;
         }
 
-        if need_redraw || matches!(state.pattern(), PatternKind::Motion) {
+        if (need_redraw || matches!(state.pattern(), PatternKind::Motion)) && flipped {
             println!("Drawing to stage!");
 
             match state.pattern() {
@@ -597,6 +597,8 @@ fn main() -> Result<()> {
             surface.flip()?;
             need_redraw = false;
         }
+
+        flipped = false;
     }
 
     Ok(())

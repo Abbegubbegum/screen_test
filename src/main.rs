@@ -224,23 +224,27 @@ const SOLIDS: &[(u8, u8, u8)] = &[
     (0, 0, 0),
 ];
 
-fn put_rgb(buf: &mut [u8], stride: usize, x: usize, y: usize, r: u8, g: u8, b: u8) {
+fn put_rgb(buf: &mut [u8], stride: usize, x: usize, y: usize, r: u8, g: u8, b: u8) -> Result<()> {
     let offset = y * stride + x * 4;
 
-    assert!(offset + 3 < buf.len(), "put_rgb out of bounds {}, {}", x, y);
+    ensure!(offset + 3 < buf.len(), "put_rgb out of bounds {}, {}", x, y);
 
     buf[offset + 0] = b;
     buf[offset + 1] = g;
     buf[offset + 2] = r;
     buf[offset + 3] = 0xff;
+
+    Ok(())
 }
 
-fn fill_rgb(buf: &mut [u8], stride: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
+fn fill_rgb(buf: &mut [u8], stride: usize, w: usize, h: usize, r: u8, g: u8, b: u8) -> Result<()> {
     for y in 0..h {
         for x in 0..w {
-            put_rgb(buf, stride, x, y, r, g, b);
+            put_rgb(buf, stride, x, y, r, g, b)?;
         }
     }
+
+    Ok(())
 }
 
 fn draw_gradient(
@@ -250,7 +254,7 @@ fn draw_gradient(
     h: usize,
     mode: GradMode,
     vertical: bool,
-) {
+) -> Result<()> {
     match mode {
         GradMode::Luma => {
             let len = if vertical { h } else { w };
@@ -258,7 +262,7 @@ fn draw_gradient(
                 for x in 0..w {
                     let t = if vertical { y } else { x };
                     let v = ((t * 255) / (len - 1).max(1)) as u8;
-                    put_rgb(buf, stride, x, y, v, v, v);
+                    put_rgb(buf, stride, x, y, v, v, v)?;
                 }
             }
         }
@@ -284,14 +288,16 @@ fn draw_gradient(
                         _ => {}
                     };
 
-                    put_rgb(buf, stride, x, y, r, g, b);
+                    put_rgb(buf, stride, x, y, r, g, b)?;
                 }
             }
         }
     }
+
+    Ok(())
 }
 
-fn draw_checkerboard(buf: &mut [u8], stride: usize, w: usize, h: usize, cell: usize) {
+fn draw_checkerboard(buf: &mut [u8], stride: usize, w: usize, h: usize, cell: usize) -> Result<()> {
     let cell = cell.max(1);
 
     for y in 0..h {
@@ -300,47 +306,66 @@ fn draw_checkerboard(buf: &mut [u8], stride: usize, w: usize, h: usize, cell: us
             let bx = (x / cell) & 1;
             let white = (bx ^ by) == 0;
             let v = if white { 255 } else { 0 };
-            put_rgb(buf, stride, x, y, v, v, v);
+            put_rgb(buf, stride, x, y, v, v, v)?;
         }
     }
+    Ok(())
 }
 
-fn draw_motion_bar(buf: &mut [u8], stride: usize, w: usize, h: usize, x_pos: usize, bar_w: usize) {
-    fill_rgb(buf, stride, w, h, 128, 128, 128);
+fn draw_motion_bar(
+    buf: &mut [u8],
+    stride: usize,
+    w: usize,
+    h: usize,
+    x_pos: usize,
+    bar_w: usize,
+) -> Result<()> {
+    fill_rgb(buf, stride, w, h, 128, 128, 128)?;
 
     let x0 = x_pos.min(w.saturating_sub(1));
     let x1 = (x_pos + bar_w).min(w);
 
     for y in 0..h {
         for x in x0..x1 {
-            put_rgb(buf, stride, x, y, 230, 230, 230);
+            put_rgb(buf, stride, x, y, 230, 230, 230)?;
         }
     }
+
+    Ok(())
 }
 
-fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
-    fill_rgb(buf, stride, w, h, 32, 32, 32);
+fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) -> Result<()> {
+    fill_rgb(buf, stride, w, h, 32, 32, 32)?;
 
     let sz = (w.min(h) / 5).max(64);
 
     for (i, v) in (1u8..=5u8).enumerate() {
         let y0 = i * sz / 5;
+        println!("y0: {y0}");
 
         for y in y0..(y0 * sz / 5) {
+            println!("y: {y}");
             for x in 0..sz.min(w) {
-                put_rgb(buf, stride, x, y, v, v, v);
+                println!("x: {x}");
+                put_rgb(buf, stride, x, y, v, v, v)?;
             }
         }
     }
 
     for (i, v) in (250u8..=254u8).enumerate() {
         let y0 = h.saturating_sub(sz) + (i * sz / 5);
+        println!("y02: {y0}");
+
         for y in y0..(y0 + sz / 5).min(h.saturating_sub(1)) {
+            println!("y2: {y}");
             for x in (w.saturating_sub(sz))..w {
-                put_rgb(buf, stride, x, y, v, v, v);
+                println!("x2: {x}");
+                put_rgb(buf, stride, x, y, v, v, v)?;
             }
         }
     }
+
+    Ok(())
 }
 
 fn clamp_rect(
@@ -377,13 +402,15 @@ fn fill_rect(
     r: u8,
     g: u8,
     b: u8,
-) {
+) -> Result<()> {
     let (x0, y0, rw, rh) = clamp_rect(x, y, w, h, ww, hh);
     for yy in y0..y0 + rh {
         for xx in x0..x0 + rw {
-            put_rgb(buf, stride, xx, yy, r, g, b);
+            put_rgb(buf, stride, xx, yy, r, g, b)?;
         }
     }
+
+    Ok(())
 }
 fn draw_rect_outline(
     buf: &mut [u8],
@@ -398,8 +425,8 @@ fn draw_rect_outline(
     r: u8,
     g: u8,
     b: u8,
-) {
-    fill_rect(buf, stride, ww, hh, x, y, w, t, r, g, b);
+) -> Result<()> {
+    fill_rect(buf, stride, ww, hh, x, y, w, t, r, g, b)?;
     fill_rect(
         buf,
         stride,
@@ -412,8 +439,8 @@ fn draw_rect_outline(
         r,
         g,
         b,
-    );
-    fill_rect(buf, stride, ww, hh, x, y, t, h, r, g, b);
+    )?;
+    fill_rect(buf, stride, ww, hh, x, y, t, h, r, g, b)?;
     fill_rect(
         buf,
         stride,
@@ -426,7 +453,8 @@ fn draw_rect_outline(
         r,
         g,
         b,
-    );
+    )?;
+    Ok(())
 }
 fn draw_crosshair(buf: &mut [u8], stride: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
     let cx = w / 2;
@@ -792,7 +820,7 @@ fn main() -> Result<()> {
                         r,
                         g,
                         b,
-                    );
+                    )?;
                 }
                 PatternKind::Gradient => {
                     draw_gradient(
@@ -802,7 +830,7 @@ fn main() -> Result<()> {
                         surface.disp_h,
                         state.grad_mode,
                         state.grad_vertical,
-                    );
+                    )?;
                 }
                 PatternKind::Checker => {
                     draw_checkerboard(
@@ -811,7 +839,7 @@ fn main() -> Result<()> {
                         surface.disp_w,
                         surface.disp_h,
                         state.checker_cell,
-                    );
+                    )?;
                 }
                 PatternKind::Motion => {
                     let bar_w = (surface.disp_w / 40).max(8);
@@ -831,10 +859,10 @@ fn main() -> Result<()> {
                         surface.disp_h,
                         state.motion_x as usize,
                         bar_w,
-                    );
+                    )?;
                 }
                 PatternKind::Patches => {
-                    draw_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
+                    draw_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h)?;
                 }
                 PatternKind::Viewing => {
                     draw_viewing_card(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);

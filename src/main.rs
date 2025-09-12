@@ -341,7 +341,197 @@ fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
     }
 }
 
+fn clamp_rect(
+    x: isize,
+    y: isize,
+    w: usize,
+    h: usize,
+    ww: usize,
+    hh: usize,
+) -> (usize, usize, usize, usize) {
+    let mut x0 = x.max(0) as usize;
+    let mut y0 = y.max(0) as usize;
+    let mut rw = w.min(ww.saturating_sub(x0));
+    let mut rh = h.min(hh.saturating_sub(y0));
+    if x0 >= ww {
+        x0 = 0;
+        rw = 0;
+    }
+    if y0 >= hh {
+        y0 = 0;
+        rh = 0;
+    }
+    (x0, y0, rw, rh)
+}
+fn fill_rect(
+    buf: &mut [u8],
+    stride: usize,
+    ww: usize,
+    hh: usize,
+    x: isize,
+    y: isize,
+    w: usize,
+    h: usize,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    let (x0, y0, rw, rh) = clamp_rect(x, y, w, h, ww, hh);
+    for yy in y0..y0 + rh {
+        for xx in x0..x0 + rw {
+            put_rgb(buf, stride, xx, yy, r, g, b);
+        }
+    }
+}
+fn draw_rect_outline(
+    buf: &mut [u8],
+    stride: usize,
+    ww: usize,
+    hh: usize,
+    x: isize,
+    y: isize,
+    w: usize,
+    h: usize,
+    t: usize,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    fill_rect(buf, stride, ww, hh, x, y, w, t, r, g, b);
+    fill_rect(
+        buf,
+        stride,
+        ww,
+        hh,
+        x,
+        y as isize + (h as isize - t as isize),
+        w,
+        t,
+        r,
+        g,
+        b,
+    );
+    fill_rect(buf, stride, ww, hh, x, y, t, h, r, g, b);
+    fill_rect(
+        buf,
+        stride,
+        ww,
+        hh,
+        x as isize + (w as isize - t as isize),
+        y,
+        t,
+        h,
+        r,
+        g,
+        b,
+    );
+}
+fn draw_crosshair(buf: &mut [u8], stride: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
+    let cx = w / 2;
+    let cy = h / 2;
+    // horizontal line
+    for x in 0..w {
+        put_rgb(buf, stride, x, cy, r, g, b);
+    }
+    // vertical line
+    for y in 0..h {
+        put_rgb(buf, stride, cx, y, r, g, b);
+    }
+}
+fn draw_viewing_card(buf: &mut [u8], stride: usize, w: usize, h: usize) {
+    // black background
+    fill_rgb(buf, stride, w, h, 0, 0, 0);
 
+    // white border
+    let t = (w.min(h) / 200).max(2);
+    draw_rect_outline(buf, stride, w, h, 0, 0, w, h, t, 255, 255, 255);
+
+    // corner boxes with high-contrast content
+    let box_w = (w / 5).max(80);
+    let box_h = (h / 5).max(80);
+    // TL: white box
+    fill_rect(
+        buf,
+        stride,
+        w,
+        h,
+        t as isize * 2,
+        t as isize * 2,
+        box_w,
+        box_h,
+        255,
+        255,
+        255,
+    );
+    // TR: fine checker (tests scaling / chroma)
+    let cell = (box_w / 12).max(2);
+    for yy in 0..box_h {
+        for xx in 0..box_w {
+            let on = ((xx / cell + yy / cell) & 1) == 0;
+            let v = if on { 255 } else { 0 };
+            put_rgb(buf, stride, (w - box_w - t * 2 + xx), (t * 2 + yy), v, v, v);
+        }
+    }
+    // BL: vertical color bars (R,G,B)
+    let seg = (box_w / 3).max(8);
+    fill_rect(
+        buf,
+        stride,
+        w,
+        h,
+        t as isize * 2,
+        (h - box_h - t * 2) as isize,
+        seg,
+        box_h,
+        255,
+        0,
+        0,
+    );
+    fill_rect(
+        buf,
+        stride,
+        w,
+        h,
+        (t * 2 + seg) as isize,
+        (h - box_h - t * 2) as isize,
+        seg,
+        box_h,
+        0,
+        255,
+        0,
+    );
+    fill_rect(
+        buf,
+        stride,
+        w,
+        h,
+        (t * 2 + 2 * seg) as isize,
+        (h - box_h - t * 2) as isize,
+        seg,
+        box_h,
+        0,
+        0,
+        255,
+    );
+    // BR: diagonal stripes (luminance)
+    for yy in 0..box_h {
+        for xx in 0..box_w {
+            let v = if ((xx + yy) / 8) % 2 == 0 { 220 } else { 30 };
+            put_rgb(
+                buf,
+                stride,
+                (w - box_w - t * 2 + xx),
+                (h - box_h - t * 2 + yy),
+                v,
+                v,
+                v,
+            );
+        }
+    }
+
+    // center crosshair
+    draw_crosshair(buf, stride, w, h, 255, 255, 0);
+}
 
 fn open_keyboard() -> Result<EvDev> {
     for (path, dev) in evdev::enumerate() {

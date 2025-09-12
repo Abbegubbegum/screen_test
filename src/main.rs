@@ -341,12 +341,14 @@ fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) -> Result<()>
 
     for (i, v) in (1u8..=5u8).enumerate() {
         let y0 = i * sz / 5;
+        println! {"color: {v}"}
         println!("y0: {y0}");
+
+        println!("to {}", y0 * sz / 5);
 
         for y in y0..(y0 * sz / 5) {
             println!("y: {y}");
             for x in 0..sz.min(w) {
-                println!("x: {x}");
                 put_rgb(buf, stride, x, y, v, v, v)?;
             }
         }

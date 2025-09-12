@@ -170,17 +170,18 @@ impl Surface {
         Ok(())
     }
 
-    fn handle_drm_events(&mut self) -> Result<()> {
+    fn handle_drm_events(&mut self) -> Result<bool> {
         for event in self.card.receive_events()? {
             if let ctrl::Event::PageFlip(_) = event {
                 if self.is_flipping {
                     self.front = self.back();
                     self.is_flipping = false;
+                    return Ok(true);
                 }
             }
         }
 
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -433,6 +434,8 @@ fn main() -> Result<()> {
 
     let mut last_frame = Instant::now();
 
+    let mut flipped = false;
+
     'mainloop: loop {
         let (drm_ready, kb_ready) = {
             let mut fds = [
@@ -456,7 +459,7 @@ fn main() -> Result<()> {
         };
 
         if drm_ready {
-            surface.handle_drm_events()?;
+            flipped = surface.handle_drm_events()?;
         }
 
         if kb_ready {
@@ -513,7 +516,7 @@ fn main() -> Result<()> {
         let _dt = now.duration_since(last_frame);
         last_frame = now;
 
-        if need_redraw || matches!(state.pattern(), PatternKind::Motion) {
+        if (need_redraw || matches!(state.pattern(), PatternKind::Motion)) && flipped {
             match state.pattern() {
                 PatternKind::Solid => {
                     let (r, g, b) = SOLIDS[state.solid_idx];
@@ -580,6 +583,8 @@ fn main() -> Result<()> {
             surface.flip()?;
             need_redraw = false;
         }
+
+        flipped = false;
     }
 
     Ok(())

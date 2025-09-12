@@ -337,31 +337,24 @@ fn draw_motion_bar(
 fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) -> Result<()> {
     fill_rgb(buf, stride, w, h, 32, 32, 32)?;
 
-    let sz = (w.min(h) / 5).max(64);
+    let colors_area = (w.min(h) / 5).max(64);
+    let color_area = colors_area / 5;
 
     for (i, v) in (1u8..=5u8).enumerate() {
-        let y0 = i * sz / 5;
-        println! {"color: {v}"}
-        println!("y0: {y0}");
+        let y0 = i * color_area;
 
-        println!("to {}", y0 * sz / 5);
-
-        for y in y0..(y0 * sz / 5) {
-            println!("y: {y}");
-            for x in 0..sz.min(w) {
+        for y in y0..((i + 1) * color_area) {
+            for x in 0..colors_area.min(w) {
                 put_rgb(buf, stride, x, y, v, v, v)?;
             }
         }
     }
 
     for (i, v) in (250u8..=254u8).enumerate() {
-        let y0 = h.saturating_sub(sz) + (i * sz / 5);
-        println!("y02: {y0}");
+        let y0 = h.saturating_sub(colors_area) + (i * color_area);
 
-        for y in y0..(y0 + sz / 5).min(h.saturating_sub(1)) {
-            println!("y2: {y}");
-            for x in (w.saturating_sub(sz))..w {
-                println!("x2: {x}");
+        for y in y0..((i + 1) + color_area).min(h.saturating_sub(1)) {
+            for x in (w.saturating_sub(colors_area))..w {
                 put_rgb(buf, stride, x, y, v, v, v)?;
             }
         }

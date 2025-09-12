@@ -436,6 +436,8 @@ fn main() -> Result<()> {
 
     let mut flipped = false;
 
+    let mut pause = false;
+
     'mainloop: loop {
         let (drm_ready, kb_ready) = {
             let mut fds = [
@@ -504,6 +506,9 @@ fn main() -> Result<()> {
                                     _ => 2,
                                 }
                             }
+                            KeyCode::KEY_0 => {
+                                pause = !pause;
+                            }
                             _ => {}
                         }
 
@@ -516,6 +521,10 @@ fn main() -> Result<()> {
         let now = Instant::now();
         let _dt = now.duration_since(last_frame);
         last_frame = now;
+
+        if pause {
+            continue;
+        }
 
         if need_redraw || matches!(state.pattern(), PatternKind::Motion) {
             println!("Drawing to stage!");
@@ -591,8 +600,6 @@ fn main() -> Result<()> {
             surface.flip()?;
             need_redraw = false;
         }
-
-        flipped = false;
     }
 
     Ok(())

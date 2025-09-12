@@ -335,7 +335,7 @@ fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
 
     for (i, v) in (250u8..=254u8).enumerate() {
         let y0 = h.saturating_sub(sz) + (i * sz / 5);
-        for y in y0..(y0 + sz / 5).min(h) {
+        for y in y0..(y0 + sz / 5).min(h.saturating_sub(1)) {
             for x in (w.saturating_sub(sz))..w {
                 put_rgb(buf, stride, x, y, v, v, v);
             }

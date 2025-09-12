@@ -445,7 +445,7 @@ fn main() -> Result<()> {
                 PollFd::new(kb.as_fd(), PollFlags::POLLIN),
             ];
 
-            let _ = poll(&mut fds, PollTimeout::NONE)?;
+            let _ = poll(&mut fds, 5u16)?;
 
             let drm_ready = fds[0]
                 .revents()
@@ -456,6 +456,8 @@ fn main() -> Result<()> {
                 .revents()
                 .unwrap_or(PollFlags::empty())
                 .contains(PollFlags::POLLIN);
+
+            println!("poll: drm {}, kb {}", drm_ready, kb_ready);
 
             (drm_ready, kb_ready)
         };

@@ -652,11 +652,6 @@ impl AppState {
         }
 
         script.push(Step {
-            pat: PatternKind::Patches,
-            ..Default::default()
-        });
-
-        script.push(Step {
             pat: PatternKind::Viewing,
             ..Default::default()
         });

@@ -10,7 +10,7 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, BorrowedFd};
 use std::time::Instant;
 
-use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+use nix::poll::{PollFd, PollFlags, poll};
 
 #[derive(Debug)]
 struct Card(File);
@@ -201,6 +201,8 @@ enum PatternKind {
     Gradient,
     Checker,
     Motion,
+    Patches,
+    Viewing,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -314,12 +316,16 @@ fn draw_motion_bar(buf: &mut [u8], stride: usize, w: usize, h: usize, x_pos: usi
     }
 }
 
-fn overlay_near_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
-    let sz = (w.min(h) / 10).max(32);
+fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
+    fill_rgb(buf, stride, w, h, 32, 32, 32);
+
+    let sz = (w.min(h) / 5).max(64);
 
     for (i, v) in (1u8..=5u8).enumerate() {
-        for y in (i * sz / 5)..((i + 1) * sz / 5) {
-            for x in 0..sz {
+        let y0 = i * sz / 5;
+
+        for y in y0..(y0 * sz / 5) {
+            for x in 0..sz.min(w) {
                 put_rgb(buf, stride, x, y, v, v, v);
             }
         }
@@ -334,6 +340,8 @@ fn overlay_near_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
         }
     }
 }
+
+
 
 fn open_keyboard() -> Result<EvDev> {
     for (path, dev) in evdev::enumerate() {
@@ -412,8 +420,6 @@ impl AppState {
             1 => 2,
             2 => 4,
             4 => 8,
-            8 => 16,
-            16 => 32,
             _ => 1,
         }
     }
@@ -586,7 +592,7 @@ fn main() -> Result<()> {
                 }
             }
             if state.show_patches {
-                overlay_near_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
+                draw_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
             }
         }
 

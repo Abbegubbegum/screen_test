@@ -10,7 +10,7 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::io::{AsFd, BorrowedFd};
 use std::time::Instant;
 
-use nix::poll::{PollFd, PollFlags, poll};
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
 #[derive(Debug)]
 struct Card(File);
@@ -304,7 +304,7 @@ fn draw_checkerboard(buf: &mut [u8], stride: usize, w: usize, h: usize, cell: us
 fn draw_motion_bar(buf: &mut [u8], stride: usize, w: usize, h: usize, x_pos: usize, bar_w: usize) {
     fill_rgb(buf, stride, w, h, 0, 0, 0);
 
-    let x0 = x_pos.min(w);
+    let x0 = x_pos.min(w.saturating_sub(1));
     let x1 = (x_pos + bar_w).min(w);
 
     for y in 0..h {
@@ -445,7 +445,7 @@ fn main() -> Result<()> {
                 PollFd::new(kb.as_fd(), PollFlags::POLLIN),
             ];
 
-            let _ = poll(&mut fds, 1u16)?;
+            let _ = poll(&mut fds, PollTimeout::NONE)?;
 
             let drm_ready = fds[0]
                 .revents()
@@ -462,7 +462,7 @@ fn main() -> Result<()> {
 
         if drm_ready {
             println!("flip has gone through!");
-            flipped = surface.handle_drm_events()?;
+            surface.handle_drm_events()?;
         }
 
         if kb_ready {

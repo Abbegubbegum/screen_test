@@ -433,7 +433,7 @@ fn main() -> Result<()> {
 
     let mut last_frame = Instant::now();
 
-    let mut flipped = false;
+    let mut need_redraw = true;
 
     let mut pause = false;
 
@@ -444,7 +444,7 @@ fn main() -> Result<()> {
                 PollFd::new(kb.as_fd(), PollFlags::POLLIN),
             ];
 
-            let _ = poll(&mut fds, 5u16)?;
+            let _ = poll(&mut fds, 30u16)?;
 
             let drm_ready = fds[0]
                 .revents()
@@ -456,14 +456,12 @@ fn main() -> Result<()> {
                 .unwrap_or(PollFlags::empty())
                 .contains(PollFlags::POLLIN);
 
-            println!("poll: drm {}, kb {}", drm_ready, kb_ready);
-
             (drm_ready, kb_ready)
         };
 
         if drm_ready {
             println!("flip has gone through!");
-            flipped = surface.handle_drm_events()?;
+            surface.handle_drm_events()?;
         }
 
         if kb_ready {
@@ -500,11 +498,12 @@ fn main() -> Result<()> {
                             }
                             KeyCode::KEY_M => {
                                 state.motion_speed = match state.motion_speed {
+                                    1 => 2,
                                     2 => 4,
                                     4 => 8,
                                     8 => 16,
                                     16 => 32,
-                                    _ => 2,
+                                    _ => 1,
                                 }
                             }
                             KeyCode::KEY_0 => {
@@ -512,6 +511,8 @@ fn main() -> Result<()> {
                             }
                             _ => {}
                         }
+
+                        need_redraw = true;
                     }
                 }
             }
@@ -521,73 +522,83 @@ fn main() -> Result<()> {
         let _dt = now.duration_since(last_frame);
         last_frame = now;
 
-        if pause || !flipped {
+        if pause {
             continue;
         }
 
-        match state.pattern() {
-            PatternKind::Solid => {
-                let (r, g, b) = SOLIDS[state.solid_idx];
+        let should_draw = need_redraw || matches!(state.pattern(), PatternKind::Motion);
 
-                fill_rgb(
-                    &mut stage,
-                    surface.stride(),
-                    surface.disp_w,
-                    surface.disp_h,
-                    r,
-                    g,
-                    b,
-                );
-            }
-            PatternKind::Gradient => {
-                draw_gradient(
-                    &mut stage,
-                    surface.stride(),
-                    surface.disp_w,
-                    surface.disp_h,
-                    state.grad_mode,
-                    state.grad_vertical,
-                );
-            }
-            PatternKind::Checker => {
-                draw_checkerboard(
-                    &mut stage,
-                    surface.stride(),
-                    surface.disp_w,
-                    surface.disp_h,
-                    state.checker_cell,
-                );
-            }
-            PatternKind::Motion => {
-                let bar_w = (surface.disp_w / 40).max(8);
-                state.motion_x =
-                    state.motion_x + (state.motion_dir as isize) * (state.motion_speed as isize);
+        if should_draw {
+            println!("draw stage");
 
-                if state.motion_x < 0 {
-                    state.motion_x = (surface.disp_w as isize) - 1
-                } else if state.motion_x as usize >= surface.disp_w {
-                    state.motion_x = 0;
+            match state.pattern() {
+                PatternKind::Solid => {
+                    let (r, g, b) = SOLIDS[state.solid_idx];
+
+                    fill_rgb(
+                        &mut stage,
+                        surface.stride(),
+                        surface.disp_w,
+                        surface.disp_h,
+                        r,
+                        g,
+                        b,
+                    );
                 }
+                PatternKind::Gradient => {
+                    draw_gradient(
+                        &mut stage,
+                        surface.stride(),
+                        surface.disp_w,
+                        surface.disp_h,
+                        state.grad_mode,
+                        state.grad_vertical,
+                    );
+                }
+                PatternKind::Checker => {
+                    draw_checkerboard(
+                        &mut stage,
+                        surface.stride(),
+                        surface.disp_w,
+                        surface.disp_h,
+                        state.checker_cell,
+                    );
+                }
+                PatternKind::Motion => {
+                    let bar_w = (surface.disp_w / 40).max(8);
+                    state.motion_x = state.motion_x
+                        + (state.motion_dir as isize) * (state.motion_speed as isize);
 
-                draw_motion_bar(
-                    &mut stage,
-                    surface.stride(),
-                    surface.disp_w,
-                    surface.disp_h,
-                    state.motion_x as usize,
-                    bar_w,
-                );
+                    if state.motion_x < 0 {
+                        state.motion_x = (surface.disp_w as isize) - 1
+                    } else if state.motion_x as usize >= surface.disp_w {
+                        state.motion_x = 0;
+                    }
+
+                    draw_motion_bar(
+                        &mut stage,
+                        surface.stride(),
+                        surface.disp_w,
+                        surface.disp_h,
+                        state.motion_x as usize,
+                        bar_w,
+                    );
+                }
+            }
+            if state.show_patches {
+                overlay_near_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
             }
         }
 
-        if state.show_patches {
-            overlay_near_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
+        if should_draw && !surface.is_flipping {
+            println!("draw");
+            surface.write_to_back(&stage)?;
+            surface.flip()?;
+
+            need_redraw = false;
         }
 
-        surface.write_to_back(&stage)?;
-        surface.flip()?;
-
-        flipped = false;
+        println!("loop");
     }
 
     Ok(())

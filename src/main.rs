@@ -195,8 +195,9 @@ impl Drop for Surface {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 enum PatternKind {
+    #[default]
     Solid,
     Gradient,
     Checker,
@@ -205,8 +206,9 @@ enum PatternKind {
     Viewing,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 enum GradMode {
+    #[default]
     Luma,
     Red,
     Green,
@@ -469,7 +471,7 @@ fn draw_viewing_card(buf: &mut [u8], stride: usize, w: usize, h: usize) {
         for xx in 0..box_w {
             let on = ((xx / cell + yy / cell) & 1) == 0;
             let v = if on { 255 } else { 0 };
-            put_rgb(buf, stride, (w - box_w - t * 2 + xx), (t * 2 + yy), v, v, v);
+            put_rgb(buf, stride, w - box_w - t * 2 + xx, t * 2 + yy, v, v, v);
         }
     }
     // BL: vertical color bars (R,G,B)
@@ -520,8 +522,8 @@ fn draw_viewing_card(buf: &mut [u8], stride: usize, w: usize, h: usize) {
             put_rgb(
                 buf,
                 stride,
-                (w - box_w - t * 2 + xx),
-                (h - box_h - t * 2 + yy),
+                w - box_w - t * 2 + xx,
+                h - box_h - t * 2 + yy,
                 v,
                 v,
                 v,
@@ -547,9 +549,18 @@ fn open_keyboard() -> Result<EvDev> {
     Err(anyhow!("can't find device"))
 }
 
+#[derive(Clone, Copy, Default)]
+struct Step {
+    pat: PatternKind,
+    solid_idx: usize,
+    grad_mode: GradMode,
+    grad_vertical: bool,
+    checker_cell: usize,
+    motion_speed: usize,
+}
+
 struct AppState {
-    patterns: [PatternKind; 4],
-    pattern_idx: usize,
+    pattern: PatternKind,
     solid_idx: usize,
     grad_mode: GradMode,
     grad_vertical: bool,
@@ -557,20 +568,17 @@ struct AppState {
     motion_x: isize,
     motion_speed: usize,
     motion_dir: i32,
-    show_patches: bool,
-    last_switch: Instant,
+
+    script: Vec<Step>,
+    script_idx: usize,
 }
 
 impl AppState {
     fn new() -> Self {
-        Self {
-            patterns: [
-                PatternKind::Solid,
-                PatternKind::Gradient,
-                PatternKind::Checker,
-                PatternKind::Motion,
-            ],
-            pattern_idx: 0,
+        let script = AppState::create_script();
+
+        let mut appstate = Self {
+            pattern: PatternKind::Solid,
             solid_idx: 0,
             grad_mode: GradMode::Luma,
             grad_vertical: false,
@@ -578,22 +586,102 @@ impl AppState {
             motion_x: 0,
             motion_speed: 8,
             motion_dir: 1,
-            show_patches: false,
-            last_switch: Instant::now(),
+            script,
+            script_idx: 0,
+        };
+
+        appstate.apply_current_step();
+
+        return appstate;
+    }
+
+    fn create_script() -> Vec<Step> {
+        let mut script = Vec::new();
+
+        for i in 0..SOLIDS.len() {
+            script.push(Step {
+                pat: PatternKind::Solid,
+                solid_idx: i,
+                ..Default::default()
+            })
         }
+
+        script.push(Step {
+            pat: PatternKind::Gradient,
+            grad_mode: GradMode::Luma,
+            grad_vertical: false,
+            ..Default::default()
+        });
+
+        script.push(Step {
+            pat: PatternKind::Gradient,
+            grad_mode: GradMode::Luma,
+            grad_vertical: true,
+            ..Default::default()
+        });
+
+        for &gm in &[GradMode::Red, GradMode::Green, GradMode::Blue] {
+            script.push(Step {
+                pat: PatternKind::Gradient,
+                grad_mode: gm,
+                grad_vertical: true,
+                ..Default::default()
+            });
+        }
+
+        for &c in &[16, 8, 4, 2] {
+            script.push(Step {
+                pat: PatternKind::Checker,
+                checker_cell: c,
+                ..Default::default()
+            });
+        }
+
+        for &s in &[4, 8, 16] {
+            script.push(Step {
+                pat: PatternKind::Motion,
+                motion_speed: s,
+                ..Default::default()
+            });
+        }
+
+        script.push(Step {
+            pat: PatternKind::Patches,
+            ..Default::default()
+        });
+
+        script.push(Step {
+            pat: PatternKind::Viewing,
+            ..Default::default()
+        });
+
+        return script;
     }
 
-    fn next_pattern(&mut self) {
-        self.pattern_idx = (self.pattern_idx + 1) % self.patterns.len();
-        self.last_switch = Instant::now();
+    fn current_step(&self) -> Step {
+        self.script[self.script_idx]
     }
 
-    fn previous_pattern(&mut self) {
-        self.pattern_idx = (self.pattern_idx + self.patterns.len() - 1) % self.patterns.len()
+    fn apply_current_step(&mut self) {
+        let step = self.current_step();
+        self.pattern = step.pat;
+        self.solid_idx = step.solid_idx;
+        self.grad_mode = step.grad_mode;
+        self.grad_vertical = step.grad_vertical;
+        self.checker_cell = step.checker_cell;
+        self.motion_speed = step.motion_speed;
+        self.motion_x = 0;
+        self.motion_dir = 1;
     }
 
-    fn pattern(&self) -> PatternKind {
-        self.patterns[self.pattern_idx]
+    fn next_step(&mut self) {
+        self.script_idx += 1;
+        self.apply_current_step();
+    }
+
+    fn previous_step(&mut self) {
+        self.script_idx -= 1;
+        self.apply_current_step();
     }
 
     fn next_gradmode(&mut self) {
@@ -667,12 +755,12 @@ fn main() -> Result<()> {
                         match code {
                             KeyCode::KEY_Q | KeyCode::KEY_ESC => break 'mainloop,
                             KeyCode::KEY_RIGHT => {
-                                state.next_pattern();
+                                state.next_step();
                             }
                             KeyCode::KEY_LEFT => {
-                                state.previous_pattern();
+                                state.previous_step();
                             }
-                            KeyCode::KEY_SPACE => match state.pattern() {
+                            KeyCode::KEY_SPACE => match state.pattern {
                                 PatternKind::Solid => {
                                     state.solid_idx = (state.solid_idx + 1) % SOLIDS.len();
                                 }
@@ -685,12 +773,10 @@ fn main() -> Result<()> {
                                 PatternKind::Motion => {
                                     state.motion_dir *= -1;
                                 }
+                                _ => {}
                             },
                             KeyCode::KEY_V => {
                                 state.grad_vertical = !state.grad_vertical;
-                            }
-                            KeyCode::KEY_P => {
-                                state.show_patches = !state.show_patches;
                             }
                             KeyCode::KEY_M => {
                                 state.motion_speed = match state.motion_speed {
@@ -702,7 +788,7 @@ fn main() -> Result<()> {
                                     _ => 1,
                                 }
                             }
-                            KeyCode::KEY_0 => {
+                            KeyCode::KEY_P => {
                                 pause = !pause;
                             }
                             _ => {}
@@ -722,12 +808,12 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let should_draw = need_redraw || matches!(state.pattern(), PatternKind::Motion);
+        let should_draw = need_redraw || matches!(state.pattern, PatternKind::Motion);
 
         if should_draw {
             println!("draw stage");
 
-            match state.pattern() {
+            match state.pattern {
                 PatternKind::Solid => {
                     let (r, g, b) = SOLIDS[state.solid_idx];
 
@@ -780,9 +866,12 @@ fn main() -> Result<()> {
                         bar_w,
                     );
                 }
-            }
-            if state.show_patches {
-                draw_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
+                PatternKind::Patches => {
+                    draw_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
+                }
+                PatternKind::Viewing => {
+                    draw_viewing_card(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
+                }
             }
         }
 

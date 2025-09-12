@@ -302,14 +302,14 @@ fn draw_checkerboard(buf: &mut [u8], stride: usize, w: usize, h: usize, cell: us
 }
 
 fn draw_motion_bar(buf: &mut [u8], stride: usize, w: usize, h: usize, x_pos: usize, bar_w: usize) {
-    fill_rgb(buf, stride, w, h, 0, 0, 0);
+    fill_rgb(buf, stride, w, h, 128, 128, 128);
 
     let x0 = x_pos.min(w.saturating_sub(1));
     let x1 = (x_pos + bar_w).min(w);
 
     for y in 0..h {
         for x in x0..x1 {
-            put_rgb(buf, stride, x, y, 255, 255, 255);
+            put_rgb(buf, stride, x, y, 230, 230, 230);
         }
     }
 }

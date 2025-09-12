@@ -591,7 +591,8 @@ fn main() -> Result<()> {
             }
         }
 
-        let should_submit = need_redraw || matches!(state.pattern(), PatternKind::Motion);
+        let should_submit =
+            (need_redraw || matches!(state.pattern(), PatternKind::Motion)) && flipped;
 
         if should_submit && !surface.is_flipping {
             println!("draw & flip!");

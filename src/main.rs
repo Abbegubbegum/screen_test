@@ -459,6 +459,7 @@ fn main() -> Result<()> {
         };
 
         if drm_ready {
+            println!("flip has gone through!");
             flipped = surface.handle_drm_events()?;
         }
 
@@ -516,7 +517,9 @@ fn main() -> Result<()> {
         let _dt = now.duration_since(last_frame);
         last_frame = now;
 
-        if (need_redraw || matches!(state.pattern(), PatternKind::Motion)) && flipped {
+        if need_redraw || matches!(state.pattern(), PatternKind::Motion) {
+            println!("Drawing to stage!");
+
             match state.pattern() {
                 PatternKind::Solid => {
                     let (r, g, b) = SOLIDS[state.solid_idx];
@@ -578,7 +581,12 @@ fn main() -> Result<()> {
         }
 
         let should_submit = need_redraw || matches!(state.pattern(), PatternKind::Motion);
+
+        println!("should submit: {}", should_submit);
+        println!("is_flipping: {}", surface.is_flipping);
+
         if should_submit && !surface.is_flipping {
+            println!("draw & flip!");
             surface.write_to_back(&stage)?;
             surface.flip()?;
             need_redraw = false;

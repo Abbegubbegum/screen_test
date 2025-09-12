@@ -338,7 +338,7 @@ fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
         let y0 = h.saturating_sub(colors_area) + (i * color_area);
         println!("y0: {y0}");
 
-        for y in y0..((i + 1) + color_area).min(h.saturating_sub(1)) {
+        for y in y0 + (i * color_area)..(y0 + (i + 1) * color_area).min(h.saturating_sub(1)) {
             println!("y: {y}");
             println!("x0: {}", w.saturating_sub(colors_area));
             println!("x1: {w}");

@@ -626,16 +626,16 @@ impl AppState {
             ..Default::default()
         });
 
-        for &gm in &[GradMode::Red, GradMode::Green, GradMode::Blue] {
-            script.push(Step {
-                pat: PatternKind::Gradient,
-                grad_mode: gm,
-                grad_vertical: false,
-                ..Default::default()
-            });
-        }
+        // for &gm in &[GradMode::Red, GradMode::Green, GradMode::Blue] {
+        //     script.push(Step {
+        //         pat: PatternKind::Gradient,
+        //         grad_mode: gm,
+        //         grad_vertical: false,
+        //         ..Default::default()
+        //     });
+        // }
 
-        for &c in &[16, 8, 4, 2] {
+        for &c in &[8] {
             script.push(Step {
                 pat: PatternKind::Checker,
                 checker_cell: c,
@@ -643,7 +643,7 @@ impl AppState {
             });
         }
 
-        for &s in &[4, 8, 16] {
+        for &s in &[16] {
             script.push(Step {
                 pat: PatternKind::Motion,
                 motion_speed: s,

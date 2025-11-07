@@ -769,7 +769,11 @@ fn main() -> Result<()> {
                             KeyCode::KEY_P => {
                                 pause = !pause;
                             }
-                            _ => {}
+                            _ => {
+                                if state.next_step() {
+                                    break 'mainloop;
+                                }
+                            }
                         }
 
                         need_redraw = true;

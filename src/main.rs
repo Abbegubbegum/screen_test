@@ -753,22 +753,6 @@ fn main() -> Result<()> {
                             KeyCode::KEY_LEFT => {
                                 state.previous_step();
                             }
-                            KeyCode::KEY_V => {
-                                state.grad_vertical = !state.grad_vertical;
-                            }
-                            KeyCode::KEY_M => {
-                                state.motion_speed = match state.motion_speed {
-                                    1 => 2,
-                                    2 => 4,
-                                    4 => 8,
-                                    8 => 16,
-                                    16 => 32,
-                                    _ => 1,
-                                }
-                            }
-                            KeyCode::KEY_P => {
-                                pause = !pause;
-                            }
                             _ => {
                                 if state.next_step() {
                                     break 'mainloop;

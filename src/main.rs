@@ -202,7 +202,6 @@ enum PatternKind {
     Gradient,
     Checker,
     Motion,
-    Patches,
     Viewing,
 }
 
@@ -210,9 +209,6 @@ enum PatternKind {
 enum GradMode {
     #[default]
     Luma,
-    Red,
-    Green,
-    Blue,
 }
 
 const SOLIDS: &[(u8, u8, u8)] = &[
@@ -262,32 +258,6 @@ fn draw_gradient(
                 }
             }
         }
-        _ => {
-            let channel = match mode {
-                GradMode::Red => 0,
-                GradMode::Green => 1,
-                GradMode::Blue => 2,
-                _ => unreachable!(),
-            };
-
-            let len = if vertical { h } else { w };
-            for y in 0..h {
-                for x in 0..w {
-                    let t = if vertical { y } else { x };
-                    let v = ((t * 255) / (len - 1).max(1)) as u8;
-                    let (mut r, mut g, mut b) = (0u8, 0u8, 0u8);
-
-                    match channel {
-                        0 => r = v,
-                        1 => g = v,
-                        2 => b = v,
-                        _ => {}
-                    };
-
-                    put_rgb(buf, stride, x, y, r, g, b);
-                }
-            }
-        }
     }
 }
 
@@ -314,37 +284,6 @@ fn draw_motion_bar(buf: &mut [u8], stride: usize, w: usize, h: usize, x_pos: usi
     for y in 0..h {
         for x in x0..x1 {
             put_rgb(buf, stride, x, y, 230, 230, 230);
-        }
-    }
-}
-
-fn draw_patches(buf: &mut [u8], stride: usize, w: usize, h: usize) {
-    fill_rgb(buf, stride, w, h, 32, 32, 32);
-
-    let colors_area = (w.min(h) / 5).max(64);
-    let color_area = colors_area / 5;
-
-    for (i, v) in (1u8..=5u8).enumerate() {
-        let y0 = i * color_area;
-
-        for y in y0..(y0 + color_area) {
-            for x in 0..colors_area.min(w) {
-                put_rgb(buf, stride, x, y, v, v, v);
-            }
-        }
-    }
-
-    for (i, v) in (250u8..=254u8).enumerate() {
-        let y0 = h.saturating_sub(colors_area) + (i * color_area);
-        println!("y0: {y0}");
-
-        for y in y0..(y0 + color_area).min(h.saturating_sub(1)) {
-            println!("y: {y}");
-            println!("x0: {}", w.saturating_sub(colors_area));
-            println!("x1: {w}");
-            for x in (w.saturating_sub(colors_area))..w {
-                put_rgb(buf, stride, x, y, v, v, v);
-            }
         }
     }
 }
@@ -710,8 +649,6 @@ fn main() -> Result<()> {
 
     let mut need_redraw = true;
 
-    let mut pause = false;
-
     'mainloop: loop {
         let (drm_ready, kb_ready) = {
             let mut fds = [
@@ -770,10 +707,6 @@ fn main() -> Result<()> {
         let _dt = now.duration_since(last_frame);
         last_frame = now;
 
-        if pause {
-            continue;
-        }
-
         let should_draw = need_redraw || matches!(state.pattern, PatternKind::Motion);
 
         if should_draw {
@@ -831,9 +764,6 @@ fn main() -> Result<()> {
                         state.motion_x as usize,
                         bar_w,
                     );
-                }
-                PatternKind::Patches => {
-                    draw_patches(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);
                 }
                 PatternKind::Viewing => {
                     draw_viewing_card(&mut stage, surface.stride(), surface.disp_w, surface.disp_h);

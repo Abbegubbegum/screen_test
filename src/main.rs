@@ -26,11 +26,22 @@ impl DrmDevice for Card {}
 impl CtrlDevice for Card {}
 
 impl Card {
-    fn open_default() -> Self {
+    fn open_default() -> Result<Self> {
         let mut options = OpenOptions::new();
         options.read(true).write(true);
 
-        Card(options.open("/dev/dri/card0").unwrap())
+        // Try card0 first, then card1, then card2
+        for i in 0..=2 {
+            let path = format!("/dev/dri/card{}", i);
+            if let Ok(file) = options.open(&path) {
+                eprintln!("Opened DRM device: {}", path);
+                return Ok(Card(file));
+            }
+        }
+
+        Err(anyhow!(
+            "Could not open any DRM device (tried card0, card1, card2)"
+        ))
     }
 }
 
@@ -54,7 +65,7 @@ struct Surface {
 
 impl Surface {
     fn open_default() -> Result<Self> {
-        let card = Card::open_default();
+        let card = Card::open_default()?;
 
         let res = card
             .resource_handles()
@@ -618,7 +629,7 @@ impl AppState {
     fn next_step(&mut self) -> bool {
         self.script_idx += 1;
 
-        if self.script_idx > self.script.len() {
+        if self.script_idx >= self.script.len() {
             return true;
         }
 
@@ -672,7 +683,6 @@ fn main() -> Result<()> {
         };
 
         if drm_ready {
-            println!("flip has gone through!");
             surface.handle_drm_events()?;
         }
 
@@ -710,8 +720,6 @@ fn main() -> Result<()> {
         let should_draw = need_redraw || matches!(state.pattern, PatternKind::Motion);
 
         if should_draw {
-            println!("draw stage");
-
             match state.pattern {
                 PatternKind::Solid => {
                     let (r, g, b) = SOLIDS[state.solid_idx];
@@ -772,14 +780,11 @@ fn main() -> Result<()> {
         }
 
         if should_draw && !surface.is_flipping {
-            println!("draw");
             surface.write_to_back(&stage)?;
             surface.flip()?;
 
             need_redraw = false;
         }
-
-        println!("loop");
     }
 
     Ok(())
